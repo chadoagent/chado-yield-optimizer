@@ -1,0 +1,14 @@
+[project]
+name = "chado-yield-optimizer"
+version = "0.1.0"
+description = "crvUSD yield monitoring and rebalancing agent — Synthesis Hackathon 2026, Olas Pearl track"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

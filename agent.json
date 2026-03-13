@@ -1,0 +1,9 @@
+{
+  "format": "Registration-v1",
+  "name": "Chado Yield Optimizer",
+  "description": "Chado Yield Optimizer — crvUSD yield monitoring and rebalancing agent",
+  "services": [
+    {"type": "api", "url": "https://chado.studio/yield/api/v1"}
+  ],
+  "supportedTrust": ["execution-logs"]
+}
