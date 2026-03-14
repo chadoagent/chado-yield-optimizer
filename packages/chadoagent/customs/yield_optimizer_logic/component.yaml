@@ -1,0 +1,15 @@
+name: yield_optimizer_logic
+author: chadoagent
+version: 0.1.0
+type: custom
+license: Apache-2.0
+description: 'Custom component for Chado Yield Optimizer - autonomous crvUSD yield
+  optimization logic including multi-chain support, scrvUSD savings, LlamaLend deposits,
+  and Convex/StakeDAO boosted LP strategies.
+
+  '
+aea_version: '>=1.0.0, <2.0.0'
+fingerprint:
+  __init__.py: bafybeibxyd5bgkonxgnpkqmwq7c74ggczlukqzbulsvaybd53sfxq3d64e
+fingerprint_ignore_patterns: []
+dependencies: {}

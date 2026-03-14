@@ -10,3 +10,5 @@ build/
 .pytest_cache/
 .mypy_cache/
 *.log
+ethereum_private_key.txt
+*.png

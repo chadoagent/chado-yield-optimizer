@@ -2,16 +2,18 @@
   "name": "Chado Yield Optimizer",
   "description": "Autonomous multi-chain crvUSD yield optimizer with Gnosis Safe wallet execution. Sources: scrvUSD savings, LlamaLend deposits, Convex/StakeDAO boosted LP. Chains: Ethereum, Arbitrum, Optimism, Fraxtal.",
   "image": "chadoagent/oar-yield-optimizer",
-  "service_hash": "<to-be-filled>",
-  "agent_hash": "<to-be-filled>",
+  "service_hash": "bafybeihfkdaz3der6zqlaiiyts6pij2ulvtfnri6fgc7kbhuk6ezomgmse",
+  "agent_hash": "bafybeifsmfck4jioptk4ax7ztrrukncppjohc4o7chswsnrixtdaaf7pqi",
+  "component_hash": "bafybeihiac33zodui22bqdkrzotesbz3j3btogqhgprisn4am74n653xla",
   "env_vars": {
     "RPC_URL": "https://ethereum-rpc.publicnode.com",
     "SAFE_ADDRESS": "",
     "AGENT_PRIVATE_KEY": ""
   },
   "chain": "ethereum",
-  "token_id": null,
-  "service_id": null,
+  "component_id": 316,
+  "agent_id": 104,
+  "service_id": 57,
   "configuration": {
     "rpc_url": "https://ethereum-rpc.publicnode.com",
     "port": 8716,

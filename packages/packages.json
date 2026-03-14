@@ -1,0 +1,8 @@
+{
+    "dev": {
+        "custom/chadoagent/yield_optimizer_logic/0.1.0": "bafybeid5qbwnl4ch3w3j3rq2bgovoioym7pzot7xqfkaj7xbivvlwvkymi",
+        "agent/chadoagent/yield_optimizer/0.1.0": "bafybeifsmfck4jioptk4ax7ztrrukncppjohc4o7chswsnrixtdaaf7pqi",
+        "service/chadoagent/yield_optimizer/0.1.0": "bafybeifqehzmcley5hgg2yswblkzxd7ohrpctf7gta5m3jz6ijoh4vd3mm"
+    },
+    "third_party": {}
+}

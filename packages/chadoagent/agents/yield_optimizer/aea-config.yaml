@@ -2,12 +2,14 @@ agent_name: yield_optimizer
 author: chadoagent
 version: 0.1.0
 license: Apache-2.0
-description: >
-  Autonomous multi-chain crvUSD yield optimizer with Gnosis Safe wallet execution.
-  Sources: scrvUSD savings, LlamaLend deposit, Convex/StakeDAO boosted LP.
-  Chains: Ethereum, Arbitrum, Optimism, Fraxtal.
+description: 'Autonomous multi-chain crvUSD yield optimizer with Gnosis Safe wallet
+  execution. Sources: scrvUSD savings, LlamaLend deposit, Convex/StakeDAO boosted
+  LP. Chains: Ethereum, Arbitrum, Optimism, Fraxtal.
+
+  '
 aea_version: '>=1.0.0, <2.0.0'
-fingerprint: {}
+fingerprint:
+  __init__.py: bafybeie4ryomhkjqipnhmnm6bb5iasw7443dfonhr2oozyqrlhr3oraql4
 fingerprint_ignore_patterns: []
 connections: []
 contracts: []
@@ -15,7 +17,8 @@ protocols: []
 skills: []
 default_ledger: ethereum
 required_ledgers:
-  - ethereum
+- ethereum
+default_connection: null
 default_routing: {}
 connection_private_key_paths:
   ethereum: ethereum_private_key.txt
@@ -38,8 +41,8 @@ logging_config:
   loggers:
     root:
       handlers:
-        - console
-        - file
+      - console
+      - file
       level: INFO
 dependencies:
   open-aea-ledger-ethereum: {}
