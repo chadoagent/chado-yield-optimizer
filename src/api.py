@@ -1,10 +1,13 @@
-"""REST API MVP for crvUSD Yield Optimizer.
+"""REST API + A2A protocol for crvUSD Yield Optimizer.
 
 Endpoints:
-  GET  /api/pools          - list all pools with optional filters
-  GET  /api/best-yield     - top N pools by APY
-  GET  /api/risk-score/{pool_id} - risk assessment for a pool
-  POST /api/rebalance      - simulate rebalance from current allocation
+  GET  /api/pools              - list all pools with optional filters
+  GET  /api/best-yield         - top N pools by APY
+  GET  /api/risk-score/{id}    - risk assessment for a pool
+  POST /api/rebalance          - simulate rebalance from current allocation
+  POST /a2a                    - A2A JSON-RPC 2.0 endpoint (message/send, tasks/get, tasks/cancel)
+  POST /a2a/stream             - A2A SSE streaming endpoint
+  GET  /.well-known/agent.json - A2A Agent Card for service discovery
 
 Run:
   python -m uvicorn src.api:app --host 0.0.0.0 --port 8717
@@ -14,12 +17,17 @@ Run:
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
+
+from src.auth import TIERS, check_endpoint_access, verify_api_key
 
 from src.agents.yield_optimizer import (
     YieldOptimizer,
@@ -30,17 +38,26 @@ from src.agents.yield_optimizer import (
     SUPPORTED_CHAINS,
     BRIDGE_COSTS,
 )
+from src.protocols.a2a import (
+    handle_a2a_request,
+    stream_task_events,
+    task_store,
+    TaskState,
+)
+
+logger = logging.getLogger(__name__)
 
 # ── App ──────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="crvUSD Yield Optimizer API",
     description=(
-        "Multi-chain crvUSD yield optimizer. "
+        "Multi-chain crvUSD yield optimizer with A2A protocol support. "
         "Sources: scrvUSD, LlamaLend, Convex, StakeDAO. "
-        "Chains: Ethereum, Arbitrum, Optimism, Fraxtal."
+        "Chains: Ethereum, Arbitrum, Optimism, Fraxtal. "
+        "Supports Google A2A (Agent-to-Agent) protocol for agent interoperability."
     ),
-    version="1.0.0",
+    version="1.1.0",
 )
 
 app.add_middleware(
@@ -158,7 +175,7 @@ class RebalanceResponse(BaseModel):
     rationale: str
 
 
-# ── Endpoints ────────────────────────────────────────────────────
+# ── REST Endpoints ───────────────────────────────────────────────
 
 
 @app.get("/health")
@@ -166,7 +183,8 @@ async def health():
     return {
         "status": "ok",
         "service": "crvusd-yield-optimizer-api",
-        "version": "1.0.0",
+        "version": "1.1.0",
+        "a2a": True,
     }
 
 
@@ -181,6 +199,7 @@ async def list_pools(
     order: str = Query("desc", description="Sort order (asc, desc)"),
     limit: int = Query(100, ge=1, le=500, description="Max results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
+    auth: dict = Depends(verify_api_key),
 ):
     """List all yield pools with optional filters.
 
@@ -245,6 +264,7 @@ async def best_yield(
     chain: str | None = Query(None, description="Filter by chain"),
     source: str | None = Query(None, description="Filter by source"),
     risk: str | None = Query(None, description="Max risk level (low, medium, high)"),
+    auth: dict = Depends(verify_api_key),
 ):
     """Return top N pools by APY.
 
@@ -283,7 +303,7 @@ async def best_yield(
 
 
 @app.get("/api/risk-score/{pool_id}", response_model=RiskScoreResponse)
-async def risk_score(pool_id: str):
+async def risk_score(pool_id: str, auth: dict = Depends(verify_api_key)):
     """Risk assessment for a specific pool.
 
     The pool_id is a 12-character hash from /api/pools response.
@@ -395,8 +415,9 @@ async def risk_score(pool_id: str):
 
 
 @app.post("/api/rebalance", response_model=RebalanceResponse)
-async def simulate_rebalance(req: RebalanceRequest):
+async def simulate_rebalance(req: RebalanceRequest, auth: dict = Depends(verify_api_key)):
     """Simulate rebalance: accept current allocation, suggest optimal.
+    Requires pro or enterprise tier.
 
     Send your current positions and get recommendations for optimal allocation.
 
@@ -411,6 +432,7 @@ async def simulate_rebalance(req: RebalanceRequest):
     }
     ```
     """
+    check_endpoint_access(auth, "rebalance")
     pools = await _get_pools()
     enriched = [_enrich(p) for p in pools]
 
@@ -484,8 +506,6 @@ async def simulate_rebalance(req: RebalanceRequest):
         )
 
     # Build rebalance plan
-    # Withdraw from worse pools, deposit into top pools
-    # Simple strategy: concentrate into top 1-3 pools
     top_n = min(3, len(eligible))
     top_pools = eligible[:top_n]
 
@@ -510,7 +530,7 @@ async def simulate_rebalance(req: RebalanceRequest):
                     current_amount_usd=alloc.amount_usd,
                     suggested_amount_usd=0,
                     apy=pool.get("apy", 0) if pool else 0,
-                    reason=f"Better opportunities available in top pools",
+                    reason="Better opportunities available in top pools",
                 ),
             )
 
@@ -561,24 +581,452 @@ async def simulate_rebalance(req: RebalanceRequest):
     )
 
 
-# ── Agent Card ───────────────────────────────────────────────────
+# ── A2A Skill Handlers ──────────────────────────────────────────
+# These bridge A2A task requests to existing API logic.
+# Each handler takes a params dict and returns a result dict.
+
+
+async def _a2a_handle_pools(params: dict) -> dict:
+    """A2A handler: list/filter pools."""
+    pools = await _get_pools()
+    enriched = [_enrich(p) for p in pools]
+
+    chain = params.get("chain")
+    source = params.get("source")
+    min_apy = params.get("min_apy", 0)
+    min_tvl = params.get("min_tvl", 0)
+    risk = params.get("risk")
+    limit = params.get("limit", 100)
+
+    if chain:
+        enriched = [p for p in enriched if p.get("chain", "").lower() == chain.lower()]
+    if source:
+        enriched = [p for p in enriched if p.get("source", "").lower() == source.lower()]
+    if min_apy > 0:
+        enriched = [p for p in enriched if p.get("apy", 0) >= min_apy]
+    if min_tvl > 0:
+        enriched = [p for p in enriched if p.get("tvl", 0) >= min_tvl]
+    if risk:
+        enriched = [p for p in enriched if p.get("risk", "").lower() == risk.lower()]
+
+    enriched.sort(key=lambda p: p.get("apy", 0), reverse=True)
+    enriched = enriched[:limit]
+
+    return {"pools": enriched, "total": len(enriched)}
+
+
+async def _a2a_handle_best_yield(params: dict) -> dict:
+    """A2A handler: find best yield opportunities."""
+    pools = await _get_pools()
+    enriched = [_enrich(p) for p in pools]
+
+    chain = params.get("chain")
+    risk = params.get("risk")
+    top = params.get("top", params.get("count", 5))
+
+    if chain:
+        enriched = [p for p in enriched if p.get("chain", "").lower() == chain.lower()]
+
+    if risk:
+        risk_order = {"low": 0, "medium": 1, "high": 2}
+        max_risk = risk_order.get(risk.lower(), 2)
+        enriched = [
+            p for p in enriched
+            if risk_order.get(p.get("risk", "high"), 2) <= max_risk
+        ]
+
+    enriched.sort(key=lambda p: p.get("apy", 0), reverse=True)
+    enriched = enriched[:top]
+
+    return {
+        "pools": enriched,
+        "count": len(enriched),
+        "chain_filter": chain,
+    }
+
+
+async def _a2a_handle_risk_score(params: dict) -> dict:
+    """A2A handler: risk assessment for a pool."""
+    pool_id = params.get("pool_id")
+    if not pool_id:
+        raise ValueError("pool_id is required for risk-score skill")
+
+    pools = await _get_pools()
+    enriched = [_enrich(p) for p in pools]
+
+    pool = None
+    for p in enriched:
+        if p["pool_id"] == pool_id:
+            pool = p
+            break
+        if p.get("address", "").lower().startswith(pool_id.lower()):
+            pool = p
+            break
+        if pool_id.lower() in p.get("address", "").lower():
+            pool = p
+            break
+
+    if not pool:
+        raise ValueError(f"Pool not found: {pool_id}")
+
+    # Reuse the same scoring logic
+    source = pool.get("source", "")
+    chain = pool.get("chain", "ethereum")
+    apy = pool.get("apy", 0)
+    tvl = pool.get("tvl", 0)
+
+    score = 0
+    factors = []
+    source_scores = {"scrvusd": 10, "llamalend": 35, "crvusd_mint": 30, "stable_lp": 40, "boosted_lp": 60}
+    source_score = source_scores.get(source, 50)
+    score += source_score
+    factors.append(f"Source ({source}): base risk {source_score}/100")
+
+    if apy > 50:
+        score += 20
+        factors.append(f"Very high APY ({apy:.1f}%): +20 risk")
+    elif apy > 20:
+        score += 10
+        factors.append(f"High APY ({apy:.1f}%): +10 risk")
+    elif apy > 5:
+        factors.append(f"Moderate APY ({apy:.1f}%): normal range")
+    else:
+        score -= 5
+        factors.append(f"Low APY ({apy:.1f}%): -5 risk")
+
+    if tvl < 100_000:
+        score += 15
+        factors.append(f"Low TVL (${tvl:,.0f}): +15 risk")
+    elif tvl < 1_000_000:
+        score += 5
+        factors.append(f"Moderate TVL (${tvl:,.0f}): +5 risk")
+    else:
+        score -= 5
+        factors.append(f"High TVL (${tvl:,.0f}): -5 risk")
+
+    if chain != "ethereum":
+        score += 5
+        factors.append(f"L2 chain ({chain}): +5 risk")
+
+    score = max(0, min(100, score))
+
+    if score <= 25:
+        recommendation = "Low risk. Suitable for conservative strategies."
+    elif score <= 50:
+        recommendation = "Moderate risk. Good for balanced portfolios."
+    elif score <= 75:
+        recommendation = "Elevated risk. Consider position sizing."
+    else:
+        recommendation = "High risk. Small positions recommended."
+
+    return {
+        "pool_id": pool["pool_id"],
+        "pool_name": pool.get("name", ""),
+        "address": pool.get("address", ""),
+        "chain": chain,
+        "source": source,
+        "risk_level": pool.get("risk", "medium"),
+        "risk_score": score,
+        "factors": factors,
+        "recommendation": recommendation,
+    }
+
+
+async def _a2a_handle_rebalance(params: dict) -> dict:
+    """A2A handler: rebalance simulation."""
+    pools = await _get_pools()
+    enriched = [_enrich(p) for p in pools]
+
+    risk_tolerance = params.get("risk_tolerance", "high")
+    position_size = params.get("position_size", 10_000)
+    current_allocation = params.get("current_allocation", [])
+
+    risk_order = {"low": 0, "medium": 1, "high": 2}
+    max_risk = risk_order.get(risk_tolerance.lower(), 2)
+    eligible = [
+        p for p in enriched
+        if risk_order.get(p.get("risk", "high"), 2) <= max_risk
+        and p.get("apy", 0) > 0
+        and p.get("tvl", 0) >= 10_000
+    ]
+    eligible.sort(key=lambda p: p.get("apy", 0), reverse=True)
+
+    total_current = sum(a.get("amount_usd", 0) for a in current_allocation)
+    total_position = max(total_current, position_size)
+
+    if not eligible:
+        return {
+            "strategy": "hold",
+            "actions": [],
+            "current_total_usd": total_current,
+            "expected_blended_apy": 0,
+            "rationale": "No eligible pools found matching risk tolerance.",
+        }
+
+    top_n = min(3, len(eligible))
+    top_pools = eligible[:top_n]
+    total_top_apy = sum(p.get("apy", 0) for p in top_pools) or 1
+
+    actions = []
+    for p in top_pools:
+        weight = p.get("apy", 0) / total_top_apy
+        suggested = total_position * weight
+        actions.append({
+            "action": "deposit",
+            "pool_name": p.get("name", ""),
+            "pool_address": p.get("address", ""),
+            "chain": p.get("chain", "ethereum"),
+            "current_amount_usd": 0,
+            "suggested_amount_usd": round(suggested, 2),
+            "apy": p.get("apy", 0),
+            "reason": f"APY {p.get('apy', 0):.2f}% | Risk: {p.get('risk', 'medium')}",
+        })
+
+    blended_apy = sum(
+        (p.get("apy", 0) / total_top_apy) * p.get("apy", 0) for p in top_pools
+    )
+
+    strategy = "enter" if total_current == 0 else "rebalance"
+    top_names = ", ".join(f"{p.get('name', '')} ({p.get('apy', 0):.2f}%)" for p in top_pools)
+
+    return {
+        "strategy": strategy,
+        "actions": actions,
+        "current_total_usd": total_current,
+        "expected_blended_apy": round(blended_apy, 2),
+        "rationale": f"Optimal allocation across top {top_n} pools: {top_names}.",
+    }
+
+
+# Skill handler registry: maps skill IDs to handler functions
+_A2A_HANDLERS: dict[str, Any] = {
+    "pools": _a2a_handle_pools,
+    "best-yield": _a2a_handle_best_yield,
+    "risk-score": _a2a_handle_risk_score,
+    "rebalance": _a2a_handle_rebalance,
+    # Legacy aliases
+    "optimize": _a2a_handle_best_yield,
+    "yields": _a2a_handle_best_yield,
+    "risk": _a2a_handle_risk_score,
+}
+
+
+# ── A2A JSON-RPC Endpoint ───────────────────────────────────────
+
+
+@app.post("/a2a")
+async def a2a_endpoint(request: Request, auth: dict = Depends(verify_api_key)):
+    """A2A JSON-RPC 2.0 endpoint.
+
+    Supports A2A protocol methods:
+    - message/send: Send a task to the agent (natural language or structured)
+    - tasks/get: Retrieve task status and results by ID
+    - tasks/cancel: Cancel a running task
+
+    Legacy aliases also supported: SendMessage, GetTask, CancelTask, ListTasks.
+
+    Example - Natural language:
+    ```json
+    {
+      "jsonrpc": "2.0",
+      "method": "message/send",
+      "params": {
+        "message": {
+          "role": "user",
+          "parts": [{"type": "text", "text": "find best yield for 10000 crvUSD"}]
+        }
+      },
+      "id": 1
+    }
+    ```
+
+    Example - Explicit skill:
+    ```json
+    {
+      "jsonrpc": "2.0",
+      "method": "message/send",
+      "params": {
+        "skill": "best-yield",
+        "message": {
+          "role": "user",
+          "parts": [{"type": "data", "data": {"chain": "ethereum", "top": 5}}]
+        }
+      },
+      "id": 1
+    }
+    ```
+    """
+    check_endpoint_access(auth, "a2a")
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "jsonrpc": "2.0",
+                "error": {"code": -32700, "message": "Parse error: invalid JSON"},
+                "id": None,
+            },
+        )
+
+    result = await handle_a2a_request(body, _A2A_HANDLERS)
+    return JSONResponse(content=result)
+
+
+@app.post("/a2a/stream")
+async def a2a_stream_endpoint(request: Request, auth: dict = Depends(verify_api_key)):
+    """A2A SSE streaming endpoint (message/stream).
+
+    Same request format as /a2a but returns Server-Sent Events stream
+    with real-time task status updates and results.
+
+    Example:
+    ```json
+    {
+      "skill": "best-yield",
+      "message": {
+        "role": "user",
+        "parts": [{"type": "text", "text": "find best yield"}]
+      }
+    }
+    ```
+    """
+    check_endpoint_access(auth, "a2a")
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON"},
+        )
+
+    # For streaming, we work directly with params
+    params = body.get("params", body)
+
+    async def event_generator():
+        async for event in stream_task_events("", _A2A_HANDLERS, params):
+            yield event
+
+    return EventSourceResponse(event_generator())
+
+
+# ── Pricing ──────────────────────────────────────────────────────
+
+
+@app.get("/api/pricing")
+async def pricing():
+    """API pricing tiers and rate limits."""
+    return {
+        "tiers": {
+            name: {
+                "price_usd_monthly": config["price_usd"],
+                "rate_limit": f"{config['rate_limit']} req/min",
+                "a2a_access": config["a2a_access"],
+                "rebalance_access": config["rebalance_access"],
+                "risk_score_access": config["risk_score_access"],
+            }
+            for name, config in TIERS.items()
+        },
+        "anonymous": {
+            "price_usd_monthly": 0,
+            "rate_limit": "5 req/min",
+            "note": "No API key required. Limited access.",
+        },
+        "contact": "api@chado.studio",
+        "how_to_get_key": "POST /api/request-key with your email and desired tier",
+    }
+
+
+# ── A2A Agent Card ───────────────────────────────────────────────
+
+_AGENT_BASE_URL = "http://51.83.161.121:8717"
 
 
 @app.get("/.well-known/agent.json")
 async def agent_card():
-    """A2A Agent Card for service discovery."""
+    """A2A Agent Card for service discovery.
+
+    Follows the A2A protocol specification for agent interoperability.
+    Other AI agents can discover this agent's capabilities and interact
+    via the /a2a JSON-RPC endpoint.
+    """
     return {
         "name": "crvUSD Yield Optimizer",
-        "description": "Multi-chain crvUSD yield optimizer API. Real-time pool data, risk scoring, rebalance simulation.",
-        "url": "http://localhost:8717",
-        "version": "1.0.0",
-        "provider": {"organization": "Chado Studio", "url": "https://chado.studio"},
-        "capabilities": {"streaming": False, "pushNotifications": False},
+        "description": (
+            "Multi-chain crvUSD yield optimizer agent. Discovers yield opportunities "
+            "across scrvUSD, LlamaLend, Convex and StakeDAO on Ethereum, Arbitrum, "
+            "Optimism and Fraxtal. Provides real-time APY data, risk scoring (0-100), "
+            "and portfolio rebalance recommendations. Accepts natural language queries."
+        ),
+        "url": _AGENT_BASE_URL,
+        "version": "1.1.0",
+        "protocolVersion": "0.2.5",
+        "provider": {
+            "organization": "Chado Studio",
+            "url": "https://chado.studio",
+        },
+        "capabilities": {
+            "streaming": True,
+            "pushNotifications": False,
+            "stateTransitionHistory": True,
+        },
+        "defaultInputModes": ["application/json", "text/plain"],
+        "defaultOutputModes": ["application/json", "text/plain"],
         "skills": [
-            {"id": "pools", "name": "Pool Discovery", "description": "List and filter crvUSD yield pools"},
-            {"id": "best-yield", "name": "Best Yield", "description": "Find top APY opportunities"},
-            {"id": "risk-score", "name": "Risk Assessment", "description": "Per-pool risk scoring (0-100)"},
-            {"id": "rebalance", "name": "Rebalance Simulation", "description": "Optimal allocation recommendations"},
+            {
+                "id": "best-yield",
+                "name": "Best Yield Finder",
+                "description": (
+                    "Find the highest-yielding crvUSD opportunities. Accepts natural language "
+                    "like 'find best yield for 10000 crvUSD on ethereum' or structured params "
+                    "(chain, risk, top)."
+                ),
+                "tags": ["yield", "apy", "defi", "crvusd"],
+                "examples": [
+                    "What's the best yield for crvUSD?",
+                    "Find top 5 pools on ethereum",
+                    "Show highest APY with low risk",
+                ],
+            },
+            {
+                "id": "pools",
+                "name": "Pool Discovery",
+                "description": (
+                    "List and filter all crvUSD yield pools across chains and sources. "
+                    "Filter by chain, source, APY, TVL, risk level."
+                ),
+                "tags": ["pools", "list", "filter", "defi"],
+                "examples": [
+                    "List all pools on arbitrum",
+                    "Show llamalend pools with APY above 5%",
+                ],
+            },
+            {
+                "id": "risk-score",
+                "name": "Risk Assessment",
+                "description": (
+                    "Calculate risk score (0-100) for a specific pool. Analyzes source risk, "
+                    "APY sustainability, TVL depth, chain risk, and utilization."
+                ),
+                "tags": ["risk", "assessment", "score", "safety"],
+                "examples": [
+                    "Risk score for pool 0x0655977FEb2f289A4aB78af67BAB0d17aAb84367",
+                    "Assess risk for pool abc123def456",
+                ],
+            },
+            {
+                "id": "rebalance",
+                "name": "Rebalance Advisor",
+                "description": (
+                    "Simulate portfolio rebalancing. Given current positions and risk tolerance, "
+                    "recommends optimal crvUSD allocation across pools."
+                ),
+                "tags": ["rebalance", "portfolio", "allocation", "strategy"],
+                "examples": [
+                    "Rebalance my portfolio of 10000 crvUSD",
+                    "Optimize my allocation with medium risk",
+                ],
+            },
         ],
     }
 

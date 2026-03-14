@@ -1,18 +1,25 @@
 """A2A v1.0 (Agent-to-Agent) protocol implementation.
 
-Implements the A2A specification with:
-- Task lifecycle (WORKING → COMPLETED/FAILED/CANCELED)
-- Messages with parts (TextPart, DataPart)
+Implements the A2A specification (https://a2a-protocol.org/latest/specification/) with:
+- Task lifecycle (working -> completed/failed/canceled/input-required)
+- Messages with parts (TextPart, DataPart, FilePart)
 - Artifacts for structured output
-- SSE streaming via SendStreamingMessage
-- JSON-RPC 2.0 and REST bindings
+- SSE streaming via message/stream
+- JSON-RPC 2.0 bindings
+- Natural language intent parsing for skill routing
+
+Method names follow the A2A spec:
+  message/send, message/stream, tasks/get, tasks/cancel
+
+Legacy method names (SendMessage, GetTask, etc.) are also supported for
+backward compatibility.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import time
+import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -30,6 +37,8 @@ class TaskState(str, Enum):
     FAILED = "failed"
     CANCELED = "canceled"
     INPUT_REQUIRED = "input-required"
+    AUTH_REQUIRED = "auth-required"
+    REJECTED = "rejected"
 
 
 class TaskStatus(BaseModel):
@@ -162,7 +171,92 @@ class TaskStore:
 task_store = TaskStore()
 
 
+# ── Natural Language Intent Parser ────────────────────────────────
+
+# Maps natural language patterns to (skill_id, extracted_params)
+_INTENT_PATTERNS: list[tuple[re.Pattern, str, list[str]]] = [
+    # Best yield / top pools (with amount before chain)
+    (re.compile(
+        r"(?:find|get|show|what(?:'s| is| are)?)\s+(?:the\s+)?(?:best|top|highest)\s+"
+        r"(?:yield|apy|apr|pools?|opportunities?)"
+        r"(?:\s+(?:for|with)\s+(\d[\d,]*)\s*(?:crvusd|usd|\$))?"
+        r"(?:\s+(?:on|in)\s+([a-zA-Z]\w*))?"
+        , re.IGNORECASE),
+     "best-yield", ["amount", "chain"]),
+
+    # Pool listing
+    (re.compile(
+        r"(?:list|show|get|find)\s+(?:all\s+)?(?:crvusd\s+)?pools?"
+        r"(?:\s+(?:on|for|in)\s+(\w+))?"
+        , re.IGNORECASE),
+     "pools", ["chain"]),
+
+    # Risk score
+    (re.compile(
+        r"(?:risk|assess|evaluate|score|rate|check)\s+(?:score\s+)?(?:for\s+)?(?:pool\s+)?"
+        r"(0x[a-fA-F0-9]+|[a-f0-9]{12})"
+        , re.IGNORECASE),
+     "risk-score", ["pool_id"]),
+
+    # Rebalance
+    (re.compile(
+        r"(?:rebalance|optimize|suggest|recommend)\s+(?:my\s+)?(?:portfolio|allocation|positions?)"
+        r"(?:\s+(\d[\d,]*)\s*(?:crvusd|usd|\$))?"
+        , re.IGNORECASE),
+     "rebalance", ["amount"]),
+
+    # Generic yield query
+    (re.compile(
+        r"(?:yield|apy|apr|earn|interest)\s+(?:on|for|in)\s+"
+        r"(?:(\d[\d,]*)\s*)?(?:crvusd)"
+        , re.IGNORECASE),
+     "best-yield", ["amount"]),
+]
+
+
+def parse_intent(text: str) -> tuple[str, dict]:
+    """Parse natural language text into a skill ID and parameters.
+
+    Returns:
+        (skill_id, params) — skill_id is the matched skill, params are extracted
+        parameters. If no intent matches, returns ("best-yield", {}) as default.
+    """
+    text = text.strip()
+
+    for pattern, skill, param_names in _INTENT_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            params = {}
+            for i, name in enumerate(param_names):
+                value = match.group(i + 1) if i + 1 <= len(match.groups()) else None
+                if value:
+                    value = value.strip().replace(",", "")
+                    if name == "amount":
+                        try:
+                            params["position_size"] = float(value)
+                        except ValueError:
+                            pass
+                    elif name == "chain":
+                        params["chain"] = value.lower()
+                    elif name == "pool_id":
+                        params["pool_id"] = value
+                    else:
+                        params[name] = value
+            return skill, params
+
+    # Default: best-yield
+    return "best-yield", {}
+
+
 # ── JSON-RPC 2.0 ─────────────────────────────────────────────────
+
+# A2A-specific error codes per spec
+TASK_NOT_FOUND_CODE = -32001
+TASK_NOT_CANCELABLE_CODE = -32002
+INVALID_PARAMS_CODE = -32602
+METHOD_NOT_FOUND_CODE = -32601
+INTERNAL_ERROR_CODE = -32603
+
 
 class A2ARequest(BaseModel):
     jsonrpc: str = "2.0"
@@ -178,30 +272,55 @@ class A2AResponse(BaseModel):
     id: int | str = 1
 
 
+# Method name aliases: A2A spec names -> internal handler names
+_METHOD_ALIASES = {
+    # A2A spec method names
+    "message/send": "message/send",
+    "message/stream": "message/stream",
+    "tasks/get": "tasks/get",
+    "tasks/cancel": "tasks/cancel",
+    # Legacy (backward compat)
+    "SendMessage": "message/send",
+    "GetTask": "tasks/get",
+    "ListTasks": "tasks/list",
+    "CancelTask": "tasks/cancel",
+    "SendStreamingMessage": "message/stream",
+}
+
+
 async def handle_a2a_request(request_data: dict, handlers: dict) -> dict:
     """Process A2A JSON-RPC 2.0 request with task lifecycle support.
 
-    Supports both legacy methods (optimize, yields, etc.) and
-    A2A v1.0 methods (SendMessage, GetTask, ListTasks, CancelTask).
+    Supports A2A spec methods (message/send, tasks/get, tasks/cancel)
+    and legacy aliases (SendMessage, GetTask, CancelTask) for backward compat.
     """
     try:
         req = A2ARequest(**request_data)
+        method = _METHOD_ALIASES.get(req.method, req.method)
 
-        # A2A v1.0 built-in methods
-        if req.method == "SendMessage":
-            return await _handle_send_message(req, handlers)
-        elif req.method == "GetTask":
-            return _handle_get_task(req)
-        elif req.method == "ListTasks":
-            return _handle_list_tasks(req)
-        elif req.method == "CancelTask":
-            return _handle_cancel_task(req)
+        if method == "message/send":
+            return await _handle_message_send(req, handlers)
+        elif method == "tasks/get":
+            return _handle_tasks_get(req)
+        elif method == "tasks/list":
+            return _handle_tasks_list(req)
+        elif method == "tasks/cancel":
+            return _handle_tasks_cancel(req)
+        elif method == "message/stream":
+            # Streaming is handled at the endpoint level, not here
+            return A2AResponse(
+                error={
+                    "code": -32600,
+                    "message": "Use the /a2a/stream endpoint for message/stream",
+                },
+                id=req.id,
+            ).model_dump()
 
-        # Legacy method dispatch
+        # Direct skill dispatch (non-A2A legacy methods)
         handler = handlers.get(req.method)
         if not handler:
             return A2AResponse(
-                error={"code": -32601, "message": f"Method not found: {req.method}"},
+                error={"code": METHOD_NOT_FOUND_CODE, "message": f"Method not found: {req.method}"},
                 id=req.id,
             ).model_dump()
 
@@ -209,22 +328,59 @@ async def handle_a2a_request(request_data: dict, handlers: dict) -> dict:
         return A2AResponse(result=result, id=req.id).model_dump()
     except Exception as e:
         return A2AResponse(
-            error={"code": -32603, "message": str(e)},
+            error={"code": INTERNAL_ERROR_CODE, "message": str(e)},
             id=request_data.get("id", 0),
         ).model_dump()
 
 
-async def _handle_send_message(req: A2ARequest, handlers: dict) -> dict:
-    """Handle SendMessage — create task, execute, return result."""
+async def _handle_message_send(req: A2ARequest, handlers: dict) -> dict:
+    """Handle message/send (A2A spec) — create task, route to skill, return result.
+
+    Supports three ways to specify the skill:
+    1. Explicit: params.skill = "best-yield"
+    2. Configuration: params.configuration.skill = "pools"
+    3. Natural language: extract intent from TextPart content
+    """
     params = req.params
-    skill = params.get("skill", "optimize")
     message_data = params.get("message", {})
 
     # Build user message
     parts = message_data.get("parts", [])
     if not parts and "text" in params:
         parts = [{"type": "text", "text": params["text"]}]
+    if not parts:
+        return A2AResponse(
+            error={"code": INVALID_PARAMS_CODE, "message": "message with parts is required"},
+            id=req.id,
+        ).model_dump()
+
     user_msg = Message(role="user", parts=parts)
+
+    # Determine skill: explicit > configuration > NLP intent from text
+    skill = params.get("skill")
+    handler_params = params.get("params", {})
+
+    if not skill:
+        config = params.get("configuration", {})
+        skill = config.get("skill")
+
+    if not skill:
+        # Try to parse intent from text parts
+        text_content = " ".join(
+            p.get("text", "") for p in parts if p.get("type") == "text"
+        ).strip()
+        if text_content:
+            skill, nlp_params = parse_intent(text_content)
+            # NLP params are defaults, explicit params override
+            merged = {**nlp_params, **handler_params}
+            handler_params = merged
+
+    skill = skill or "best-yield"
+
+    # Extract params from DataPart if present
+    for part in parts:
+        if part.get("type") == "data":
+            handler_params.update(part.get("data", {}))
 
     # Create task
     task = task_store.create(user_msg, context_id=params.get("contextId"))
@@ -233,15 +389,9 @@ async def _handle_send_message(req: A2ARequest, handlers: dict) -> dict:
     handler = handlers.get(skill)
     if not handler:
         task_store.update_status(task.id, TaskState.FAILED, f"Unknown skill: {skill}")
-        return A2AResponse(result={"task": task.model_dump()}, id=req.id).model_dump()
+        return A2AResponse(result=task.model_dump(), id=req.id).model_dump()
 
     try:
-        # Extract params from DataPart if present
-        handler_params = params.get("params", {})
-        for part in parts:
-            if part.get("type") == "data":
-                handler_params.update(part.get("data", {}))
-
         result = await handler(handler_params)
 
         # Create artifact with result
@@ -251,40 +401,72 @@ async def _handle_send_message(req: A2ARequest, handlers: dict) -> dict:
         )
         task_store.add_artifact(task.id, artifact)
 
-        # Agent response message
+        # Generate human-readable summary for agent response
+        summary = _generate_summary(skill, result)
         agent_msg = Message(
             role="agent",
-            parts=[{"type": "text", "text": f"Completed {skill} successfully."}],
+            parts=[{"type": "text", "text": summary}],
         )
         task_store.add_message(task.id, agent_msg)
         task_store.update_status(task.id, TaskState.COMPLETED)
     except Exception as e:
         task_store.update_status(task.id, TaskState.FAILED, str(e))
 
-    return A2AResponse(result={"task": task.model_dump()}, id=req.id).model_dump()
+    return A2AResponse(result=task.model_dump(), id=req.id).model_dump()
 
 
-def _handle_get_task(req: A2ARequest) -> dict:
-    """Handle GetTask — return task by ID."""
+def _generate_summary(skill: str, result: dict) -> str:
+    """Generate a human-readable summary of skill results."""
+    if skill == "best-yield":
+        pools = result.get("pools", [])
+        if not pools:
+            return "No yield opportunities found matching your criteria."
+        top = pools[0]
+        return (
+            f"Found {len(pools)} yield opportunities. "
+            f"Best: {top.get('name', '?')} at {top.get('apy', 0):.2f}% APY "
+            f"on {top.get('chain', 'ethereum')} "
+            f"(TVL: ${top.get('tvl', 0):,.0f}, risk: {top.get('risk', '?')})."
+        )
+    elif skill == "pools":
+        total = result.get("total", 0)
+        return f"Found {total} crvUSD yield pools."
+    elif skill == "risk-score":
+        return (
+            f"Risk score for {result.get('pool_name', '?')}: "
+            f"{result.get('risk_score', '?')}/100 ({result.get('risk_level', '?')}). "
+            f"{result.get('recommendation', '')}"
+        )
+    elif skill == "rebalance":
+        return (
+            f"Strategy: {result.get('strategy', '?')}. "
+            f"Expected blended APY: {result.get('expected_blended_apy', 0):.2f}%. "
+            f"{result.get('rationale', '')}"
+        )
+    return f"Completed {skill} successfully."
+
+
+def _handle_tasks_get(req: A2ARequest) -> dict:
+    """Handle tasks/get — return task by ID."""
     task_id = req.params.get("taskId") or req.params.get("id")
     if not task_id:
         return A2AResponse(
-            error={"code": -32602, "message": "taskId required"},
+            error={"code": INVALID_PARAMS_CODE, "message": "taskId is required"},
             id=req.id,
         ).model_dump()
 
     task = task_store.get(task_id)
     if not task:
         return A2AResponse(
-            error={"code": -32001, "message": f"Task not found: {task_id}"},
+            error={"code": TASK_NOT_FOUND_CODE, "message": f"Task not found: {task_id}"},
             id=req.id,
         ).model_dump()
 
-    return A2AResponse(result={"task": task.model_dump()}, id=req.id).model_dump()
+    return A2AResponse(result=task.model_dump(), id=req.id).model_dump()
 
 
-def _handle_list_tasks(req: A2ARequest) -> dict:
-    """Handle ListTasks — return tasks, optionally filtered by contextId."""
+def _handle_tasks_list(req: A2ARequest) -> dict:
+    """Handle tasks/list — return tasks, optionally filtered by contextId."""
     context_id = req.params.get("contextId")
     limit = req.params.get("limit", 50)
     tasks = task_store.list_tasks(context_id=context_id, limit=limit)
@@ -294,30 +476,34 @@ def _handle_list_tasks(req: A2ARequest) -> dict:
     ).model_dump()
 
 
-def _handle_cancel_task(req: A2ARequest) -> dict:
-    """Handle CancelTask — cancel a running task."""
+def _handle_tasks_cancel(req: A2ARequest) -> dict:
+    """Handle tasks/cancel — cancel a running task."""
     task_id = req.params.get("taskId") or req.params.get("id")
     if not task_id:
         return A2AResponse(
-            error={"code": -32602, "message": "taskId required"},
+            error={"code": INVALID_PARAMS_CODE, "message": "taskId is required"},
             id=req.id,
         ).model_dump()
 
     task = task_store.get(task_id)
     if not task:
         return A2AResponse(
-            error={"code": -32001, "message": f"Task not found: {task_id}"},
+            error={"code": TASK_NOT_FOUND_CODE, "message": f"Task not found: {task_id}"},
             id=req.id,
         ).model_dump()
 
     if task.status.state in (TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED):
         return A2AResponse(
-            error={"code": -32002, "message": f"Task already in terminal state: {task.status.state}"},
+            error={
+                "code": TASK_NOT_CANCELABLE_CODE,
+                "message": f"Task in terminal state: {task.status.state.value}",
+            },
             id=req.id,
         ).model_dump()
 
     task_store.update_status(task_id, TaskState.CANCELED, "Canceled by client")
-    return A2AResponse(result={"task": task.model_dump()}, id=req.id).model_dump()
+    task = task_store.get(task_id)
+    return A2AResponse(result=task.model_dump(), id=req.id).model_dump()
 
 
 # ── SSE Streaming ─────────────────────────────────────────────────
@@ -325,9 +511,9 @@ def _handle_cancel_task(req: A2ARequest) -> dict:
 async def stream_task_events(task_id: str, handlers: dict, params: dict):
     """Generator for SSE streaming of task events.
 
-    Yields SSE-formatted strings: "data: {json}\n\n"
+    Yields SSE-formatted strings: "data: {json}\\n\\n"
     """
-    skill = params.get("skill", "optimize")
+    skill = params.get("skill", "best-yield")
     message_data = params.get("message", {})
     parts = message_data.get("parts", [])
     if not parts and "text" in params:
@@ -343,7 +529,6 @@ async def stream_task_events(task_id: str, handlers: dict, params: dict):
     q = task_store.subscribe(task.id)
 
     try:
-        # Execute in background
         handler = handlers.get(skill)
         if not handler:
             task_store.update_status(task.id, TaskState.FAILED, f"Unknown skill: {skill}")
@@ -355,7 +540,6 @@ async def stream_task_events(task_id: str, handlers: dict, params: dict):
             if part.get("type") == "data":
                 handler_params.update(part.get("data", {}))
 
-        # Run handler
         try:
             result = await handler(handler_params)
             artifact = Artifact(
@@ -363,9 +547,10 @@ async def stream_task_events(task_id: str, handlers: dict, params: dict):
                 parts=[{"type": "data", "data": result, "mimeType": "application/json"}],
             )
             task_store.add_artifact(task.id, artifact)
+            summary = _generate_summary(skill, result)
             agent_msg = Message(
                 role="agent",
-                parts=[{"type": "text", "text": f"Completed {skill}."}],
+                parts=[{"type": "text", "text": summary}],
             )
             task_store.add_message(task.id, agent_msg)
             task_store.update_status(task.id, TaskState.COMPLETED)
@@ -393,8 +578,13 @@ class A2AClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    async def send_message(self, skill: str, params: dict | None = None, text: str = "") -> dict:
-        """Send a message (task) to a remote agent."""
+    async def send_message(
+        self,
+        skill: str,
+        params: dict | None = None,
+        text: str = "",
+    ) -> dict:
+        """Send a message (task) to a remote agent via message/send."""
         parts = []
         if text:
             parts.append({"type": "text", "text": text})
@@ -402,7 +592,7 @@ class A2AClient:
             parts.append({"type": "data", "data": params, "mimeType": "application/json"})
 
         request = A2ARequest(
-            method="SendMessage",
+            method="message/send",
             params={
                 "skill": skill,
                 "message": {"parts": parts},
@@ -418,8 +608,8 @@ class A2AClient:
             return resp.json()
 
     async def get_task(self, task_id: str) -> dict:
-        """Get task status and results."""
-        request = A2ARequest(method="GetTask", params={"taskId": task_id})
+        """Get task status and results via tasks/get."""
+        request = A2ARequest(method="tasks/get", params={"taskId": task_id})
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/a2a",
@@ -430,7 +620,7 @@ class A2AClient:
 
     async def list_tasks(self, context_id: str | None = None) -> dict:
         """List tasks, optionally filtered by context."""
-        params = {}
+        params: dict[str, Any] = {}
         if context_id:
             params["contextId"] = context_id
         request = A2ARequest(method="ListTasks", params=params)
@@ -443,8 +633,8 @@ class A2AClient:
             return resp.json()
 
     async def cancel_task(self, task_id: str) -> dict:
-        """Cancel a running task."""
-        request = A2ARequest(method="CancelTask", params={"taskId": task_id})
+        """Cancel a running task via tasks/cancel."""
+        request = A2ARequest(method="tasks/cancel", params={"taskId": task_id})
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/a2a",
@@ -454,7 +644,7 @@ class A2AClient:
             return resp.json()
 
     async def discover(self) -> dict:
-        """Fetch agent card."""
+        """Fetch agent card from /.well-known/agent.json."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.get(f"{self.base_url}/.well-known/agent.json")
             resp.raise_for_status()
