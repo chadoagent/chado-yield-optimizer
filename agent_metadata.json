@@ -3,7 +3,7 @@
   "description": "Autonomous multi-chain crvUSD yield optimizer with Gnosis Safe wallet execution. Monitors scrvUSD savings, LlamaLend deposits, Convex/StakeDAO boosted LP across Ethereum, Arbitrum, Optimism, Fraxtal.",
   "version": "0.3.0",
   "image": "https://olas.network/images/agents/yield-optimizer.png",
-  "code_uri": "https://github.com/sodofi/synthesis-hackathon",
+  "code_uri": "https://github.com/chadoagent/chado-yield-optimizer",
   "attributes": [
     {
       "trait_type": "category",

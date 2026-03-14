@@ -313,6 +313,7 @@ a:hover { text-decoration:underline; }
           <th data-sort="source">Source <span class="sort-arrow"></span></th>
           <th data-sort="apy" class="sort-active">APY <span class="sort-arrow">&#9660;</span></th>
           <th data-sort="tvl" class="col-tvl">TVL <span class="sort-arrow"></span></th>
+
           <th data-sort="risk">Risk <span class="sort-arrow"></span></th>
           <th data-sort="chain" class="col-chain">Chain <span class="sort-arrow"></span></th>
         </tr>
@@ -339,7 +340,7 @@ a:hover { text-decoration:underline; }
 // STATE
 // ============================================================
 let allPools = [];
-let currentSort = { key: 'tvl', dir: 'desc' };
+let currentSort = { key: 'apy', dir: 'desc' };
 let filters = { chain: 'all', source: 'all', risk: 'all' };
 let API_BASE = localStorage.getItem('yo_api_url') || 'http://localhost:8717';
 let walletConnected = false;
@@ -382,8 +383,10 @@ async function refreshWallet() {
     }
   } catch (e) {
     walletConnected = false;
-    statusEl.textContent = 'OFFLINE';
+    statusEl.textContent = 'DEMO MODE';
     statusEl.className = 'wp-status disconnected';
+    document.getElementById('wallet-addr').style.display = 'block';
+    document.getElementById('wallet-addr').innerHTML = 'Connect agent backend to manage funds. <a href="https://github.com/chadoagent/chado-yield-optimizer" target="_blank">Setup guide →</a>';
   }
 }
 
@@ -416,6 +419,14 @@ function openDeposit(poolAddr, poolType, poolName) {
     document.getElementById('deposit-pool-addr').value = poolAddr;
     document.getElementById('deposit-pool-info').innerHTML = 'Pool: <span>' + (poolName || poolAddr) + '</span>';
   }
+  if (poolType) {
+    const sel = document.getElementById('deposit-pool-type');
+    sel.value = poolType;
+    if (!sel.querySelector(`option[value="${poolType}"]`)) {
+      sel.innerHTML += `<option value="${poolType}">${poolType}</option>`;
+      sel.value = poolType;
+    }
+  }
   document.getElementById('deposit-result').innerHTML = '';
   document.getElementById('deposit-amount').value = '';
   document.getElementById('modal-deposit').classList.add('open');
@@ -426,6 +437,14 @@ function openWithdraw(poolAddr, poolType, poolName) {
     document.getElementById('withdraw-pool-addr').value = poolAddr;
     document.getElementById('withdraw-pool-info').innerHTML = 'Pool: <span>' + (poolName || poolAddr) + '</span>';
   }
+  if (poolType) {
+    const sel = document.getElementById('withdraw-pool-type');
+    sel.value = poolType;
+    if (!sel.querySelector(`option[value="${poolType}"]`)) {
+      sel.innerHTML += `<option value="${poolType}">${poolType}</option>`;
+      sel.value = poolType;
+    }
+  }
   document.getElementById('withdraw-result').innerHTML = '';
   document.getElementById('withdraw-amount').value = '';
   document.getElementById('modal-withdraw').classList.add('open');
@@ -434,6 +453,13 @@ function openWithdraw(poolAddr, poolType, poolName) {
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
 }
+
+// Click outside modal to close
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.classList.remove('open');
+  });
+});
 
 async function submitDeposit() {
   const btn = document.getElementById('deposit-submit');
@@ -693,7 +719,7 @@ function renderTable() {
     const chainCls = chainClass(p.chain);
 
     html += `<tr data-idx="${i}" onclick="toggleDetail(this)">
-      <td>${p.name} <span class="chain-badge ${chainCls}" style="margin-left:4px;display:inline-block;">${p.chain}</span></td>
+      <td>${p.name}</td>
       <td class="source-badge">${p.source}${p.booster ? ' <span style="color:var(--dim);font-size:9px">(' + p.booster + ')</span>' : ''}</td>
       <td class="${apyCls}">${fmtApy(p.apy)}</td>
       <td class="col-tvl">${fmtTvl(p.tvl)}</td>
@@ -708,8 +734,8 @@ function renderTable() {
         <div class="detail-item">Project: <span>${p.project || '--'}</span></div>
       </div>
       <div style="margin-top:8px;display:flex;gap:8px;">
-        <button class="btn btn-sm btn-deposit" onclick="event.stopPropagation();openDeposit('${p.address}','${p.source === 'scrvUSD' ? 'scrvusd' : 'llamalend'}','${p.name}')">DEPOSIT</button>
-        <button class="btn btn-sm btn-withdraw" onclick="event.stopPropagation();openWithdraw('${p.address}','${p.source === 'scrvUSD' ? 'scrvusd' : 'llamalend'}','${p.name}')">WITHDRAW</button>
+        <button class="btn btn-sm btn-deposit" onclick="event.stopPropagation();openDeposit('${p.address}','${p.source === 'scrvUSD' ? 'scrvusd' : p.source === 'LlamaLend' ? 'llamalend' : 'boosted_lp'}','${p.name.replace(/'/g, "\\'")}')">DEPOSIT</button>
+        <button class="btn btn-sm btn-withdraw" onclick="event.stopPropagation();openWithdraw('${p.address}','${p.source === 'scrvUSD' ? 'scrvusd' : p.source === 'LlamaLend' ? 'llamalend' : 'boosted_lp'}','${p.name.replace(/'/g, "\\'")}')">WITHDRAW</button>
       </div>
     </td></tr>`;
   });
@@ -804,6 +830,16 @@ async function init() {
       return true;
     });
 
+    // Disambiguate generic pool names — append booster tag for Boosted LP
+    const nameCounts = {};
+    allPools.forEach(p => { nameCounts[p.name] = (nameCounts[p.name] || 0) + 1; });
+    allPools.forEach(p => {
+      if (nameCounts[p.name] > 1 && p.source === 'Boosted LP' && p.address) {
+        // Use short address suffix to disambiguate
+        p.name = p.name + ' (' + p.address.slice(-6) + ')';
+      }
+    });
+
     // Filter out dust pools (TVL < $1K) except scrvUSD
     allPools = allPools.filter(p => p.source === 'scrvUSD' || p.tvl >= 1000);
 
@@ -824,6 +860,9 @@ async function init() {
 
 init();
 refreshWallet();
+
+// Auto-refresh every 5 minutes
+setInterval(() => { init(); }, 5 * 60 * 1000);
 </script>
 </body>
 </html>
