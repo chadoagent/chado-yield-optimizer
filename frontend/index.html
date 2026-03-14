@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<title>crvUSD Yield Optimizer — Chado Studio</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --bg: #0a0a0a;
+  --surface: #111;
+  --border: #1a1a1a;
+  --text: #ccc;
+  --dim: #555;
+  --accent: #00ff41;
+  --red: #ff3344;
+  --yellow: #ffaa00;
+  --blue: #4A90D9;
+  --purple: #8B5CF6;
+  --mono: 'Roboto Mono', monospace;
+}
+body { background:var(--bg); color:var(--text); font-family:var(--mono); font-size:13px; line-height:1.6; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+
+.wrap { max-width:1100px; margin:0 auto; padding:24px 16px; }
+
+/* Header */
+.header { margin-bottom:24px; border-bottom:1px solid var(--border); padding-bottom:16px; }
+.header h1 { font-size:16px; font-weight:700; letter-spacing:3px; color:#fff; }
+.header .subtitle { font-size:11px; color:var(--dim); margin-top:4px; letter-spacing:1px; }
+.header .updated { font-size:10px; color:var(--dim); margin-top:6px; letter-spacing:1px; }
+
+/* Filter section */
+.filter-group { margin-bottom:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.filter-label { font-size:9px; color:var(--dim); letter-spacing:2px; text-transform:uppercase; min-width:50px; }
+.filter-pill { font-size:10px; padding:3px 10px; border:1px solid var(--border); color:var(--dim); letter-spacing:1px; cursor:pointer; transition: border-color 0.15s, color 0.15s; background:transparent; font-family:var(--mono); }
+.filter-pill:hover { border-color:#333; color:#888; }
+.filter-pill.active { border-color:var(--accent); color:var(--accent); }
+
+/* Summary cards */
+.summary-cards { display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; margin:24px 0; }
+.summary-card { background:var(--surface); border:1px solid var(--border); padding:16px; text-align:center; }
+.summary-card .card-value { font-size:28px; font-weight:700; color:var(--accent); }
+.summary-card .card-value.neutral { color:#fff; }
+.summary-card .card-label { font-size:9px; color:var(--dim); letter-spacing:2px; text-transform:uppercase; margin-top:4px; }
+@media(max-width:500px) {
+  .summary-cards { grid-template-columns:1fr; }
+}
+
+/* Table */
+.table-wrap { overflow-x:auto; }
+.pool-table { width:100%; border-collapse:collapse; }
+.pool-table th {
+  font-size:9px; color:var(--dim); letter-spacing:2px; text-transform:uppercase;
+  padding:8px 12px; border-bottom:1px solid var(--border); text-align:left;
+  cursor:pointer; user-select:none; white-space:nowrap;
+  transition: color 0.15s;
+}
+.pool-table th:hover { color:var(--accent); }
+.pool-table th.sort-active { color:var(--accent); }
+.pool-table th .sort-arrow { margin-left:4px; font-size:8px; }
+.pool-table td { padding:10px 12px; border-bottom:1px solid #0f0f0f; font-size:12px; white-space:nowrap; }
+.pool-table tbody tr { background:var(--surface); transition:background 0.15s; cursor:pointer; }
+.pool-table tbody tr:hover { background:#161616; }
+
+/* APY colors */
+.apy-high { color:var(--accent); font-weight:700; font-size:14px; }
+.apy-med { color:var(--yellow); font-weight:700; font-size:14px; }
+.apy-low { color:var(--dim); font-weight:500; font-size:13px; }
+
+/* Risk badges */
+.risk-badge { font-size:9px; font-weight:700; letter-spacing:1px; padding:2px 6px; border-radius:2px; text-transform:uppercase; }
+.risk-low { background:#0a2e0a; color:var(--accent); border:1px solid #1a3a1a; }
+.risk-medium { background:#2e2a0a; color:var(--yellow); border:1px solid #3a3a1a; }
+.risk-high { background:#2e0a0a; color:var(--red); border:1px solid #3a1a1a; }
+
+/* Chain badges */
+.chain-badge { font-size:9px; font-weight:700; letter-spacing:1px; padding:2px 6px; border-radius:2px; }
+.chain-ethereum { background:#1a1a1a; color:#999; border:1px solid #333; }
+.chain-arbitrum { background:#0a1a2e; color:var(--blue); border:1px solid #1a2a3a; }
+.chain-optimism { background:#2e0a0a; color:#FF0420; border:1px solid #3a1a1a; }
+.chain-fraxtal { background:#1a0a2e; color:var(--purple); border:1px solid #2a1a3a; }
+.chain-base { background:#0a0a2e; color:#0052FF; border:1px solid #1a1a3a; }
+
+/* Source badge */
+.source-badge { font-size:10px; color:var(--dim); }
+
+/* Row details */
+.row-details { display:none; }
+.row-details td { padding:8px 12px 16px; border-bottom:1px solid var(--border); }
+.row-details.open { display:table-row; }
+.detail-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px,1fr)); gap:8px; }
+.detail-item { font-size:10px; color:var(--dim); }
+.detail-item span { color:var(--text); }
+
+/* Loading & Error */
+.loading-state, .error-state {
+  text-align:center; padding:48px 16px; color:var(--dim); font-size:12px; letter-spacing:1px;
+}
+.loading-state .spinner {
+  display:inline-block; width:16px; height:16px; border:2px solid var(--border);
+  border-top-color:var(--accent); border-radius:50%;
+  animation:spin 0.8s linear infinite; margin-bottom:12px;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+.error-state { color:var(--red); }
+
+/* Footer */
+.footer { margin-top:48px; padding-top:16px; border-top:1px solid var(--border); font-size:10px; color:var(--dim); text-align:center; letter-spacing:1px; }
+
+/* Responsive */
+@media(max-width:768px) {
+  .col-tvl, .col-chain { display:none; }
+  .pool-table th, .pool-table td { padding:8px 6px; }
+  .header h1 { font-size:13px; letter-spacing:2px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="header">
+    <h1>crvUSD YIELD OPTIMIZER</h1>
+    <div class="subtitle">MULTI-CHAIN YIELD MONITORING ACROSS scrvUSD, LLAMALEND, CONVEX & STAKEDAO</div>
+    <div class="updated">Last updated: <span id="last-updated">loading...</span></div>
+  </div>
+
+  <!-- Filters -->
+  <div id="filters">
+    <div class="filter-group">
+      <span class="filter-label">Chain</span>
+      <button class="filter-pill active" data-group="chain" data-value="all">ALL</button>
+      <button class="filter-pill" data-group="chain" data-value="Ethereum">Ethereum</button>
+      <button class="filter-pill" data-group="chain" data-value="Arbitrum">Arbitrum</button>
+      <button class="filter-pill" data-group="chain" data-value="Optimism">Optimism</button>
+      <button class="filter-pill" data-group="chain" data-value="Fraxtal">Fraxtal</button>
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Source</span>
+      <button class="filter-pill active" data-group="source" data-value="all">ALL</button>
+      <button class="filter-pill" data-group="source" data-value="scrvUSD">scrvUSD</button>
+      <button class="filter-pill" data-group="source" data-value="LlamaLend">LlamaLend</button>
+      <button class="filter-pill" data-group="source" data-value="Boosted LP">Boosted LP</button>
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Risk</span>
+      <button class="filter-pill active" data-group="risk" data-value="all">ALL</button>
+      <button class="filter-pill" data-group="risk" data-value="LOW">LOW</button>
+      <button class="filter-pill" data-group="risk" data-value="MEDIUM">MEDIUM</button>
+      <button class="filter-pill" data-group="risk" data-value="HIGH">HIGH</button>
+    </div>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="summary-cards">
+    <div class="summary-card">
+      <div class="card-value" id="best-apy">--</div>
+      <div class="card-label">Best APY</div>
+    </div>
+    <div class="summary-card">
+      <div class="card-value neutral" id="total-pools">--</div>
+      <div class="card-label">Total Pools</div>
+    </div>
+    <div class="summary-card">
+      <div class="card-value neutral" id="chains-scanned">--</div>
+      <div class="card-label">Chains Scanned</div>
+    </div>
+  </div>
+
+  <!-- Pool table -->
+  <div class="table-wrap">
+    <table class="pool-table" id="pool-table">
+      <thead>
+        <tr>
+          <th data-sort="name">Pool <span class="sort-arrow"></span></th>
+          <th data-sort="source">Source <span class="sort-arrow"></span></th>
+          <th data-sort="apy" class="sort-active">APY <span class="sort-arrow">&#9660;</span></th>
+          <th data-sort="tvl" class="col-tvl">TVL <span class="sort-arrow"></span></th>
+          <th data-sort="risk">Risk <span class="sort-arrow"></span></th>
+          <th data-sort="chain" class="col-chain">Chain <span class="sort-arrow"></span></th>
+        </tr>
+      </thead>
+      <tbody id="pool-body">
+        <tr><td colspan="6">
+          <div class="loading-state" id="loading-state">
+            <div class="spinner"></div>
+            <div>SCANNING YIELD SOURCES...</div>
+          </div>
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footer">
+    Chado Studio &middot; crvUSD Yield Optimizer &middot; Data from DefiLlama & Curve API
+  </div>
+
+</div>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+let allPools = [];
+let currentSort = { key: 'tvl', dir: 'desc' };
+let filters = { chain: 'all', source: 'all', risk: 'all' };
+
+// ============================================================
+// FORMAT HELPERS
+// ============================================================
+function fmtApy(v) {
+  if (v == null || isNaN(v)) return '--';
+  return v.toFixed(2) + '%';
+}
+
+function fmtTvl(v) {
+  if (v == null || isNaN(v)) return '--';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+  return '$' + v.toFixed(0);
+}
+
+function chainClass(chain) {
+  const c = (chain || '').toLowerCase();
+  if (c === 'ethereum' || c === 'mainnet') return 'chain-ethereum';
+  if (c === 'arbitrum') return 'chain-arbitrum';
+  if (c === 'optimism') return 'chain-optimism';
+  if (c === 'fraxtal') return 'chain-fraxtal';
+  if (c === 'base') return 'chain-base';
+  return 'chain-ethereum';
+}
+
+function normalizeChain(chain) {
+  if (!chain) return 'Ethereum';
+  const c = chain.toLowerCase();
+  if (c === 'mainnet') return 'Ethereum';
+  return chain.charAt(0).toUpperCase() + chain.slice(1).toLowerCase();
+}
+
+function apyClass(v) {
+  if (v >= 10) return 'apy-high';
+  if (v >= 3) return 'apy-med';
+  return 'apy-low';
+}
+
+function riskClass(r) {
+  if (r === 'LOW') return 'risk-low';
+  if (r === 'MEDIUM') return 'risk-medium';
+  return 'risk-high';
+}
+
+// ============================================================
+// DATA FETCHING
+// ============================================================
+async function fetchScrvUSD() {
+  try {
+    const res = await fetch('https://yields.llama.fi/pools');
+    const json = await res.json();
+    const pools = (json.data || []).filter(p =>
+      p.project === 'crvusd' && (p.symbol || '').toUpperCase().includes('SCRVUSD')
+    );
+    return pools.map(p => ({
+      name: p.symbol || 'scrvUSD',
+      source: 'scrvUSD',
+      apy: p.apy || 0,
+      apyBase: p.apyBase,
+      apyReward: p.apyReward,
+      tvl: p.tvlUsd || 0,
+      risk: 'LOW',
+      chain: normalizeChain(p.chain),
+      address: p.pool || '',
+      project: p.project
+    }));
+  } catch (e) {
+    console.error('scrvUSD fetch error:', e);
+    return [];
+  }
+}
+
+async function fetchLlamaLend() {
+  const chains = ['ethereum', 'arbitrum', 'optimism', 'fraxtal'];
+  const results = [];
+
+  const fetches = chains.map(async (chain) => {
+    try {
+      const res = await fetch(`https://prices.curve.finance/v1/lending/markets/${chain}`);
+      if (!res.ok) return [];
+      const json = await res.json();
+      const markets = json.data || json;
+      if (!Array.isArray(markets)) return [];
+      return markets.filter(m => (m.total_assets_usd || 0) >= 100000).map(m => {
+        const collSymbol = m.collateral_token?.symbol || '?';
+        const borrSymbol = m.borrowed_token?.symbol || '?';
+        const lendApy = m.lend_apy || 0;
+        const crvBoost = m.lend_apr_crv_max_boost || 0;
+        return {
+          name: collSymbol + '/' + borrSymbol,
+          source: 'LlamaLend',
+          apy: lendApy + crvBoost,
+          apyBase: lendApy,
+          apyReward: crvBoost > 0 ? crvBoost : null,
+          tvl: m.total_assets_usd || 0,
+          risk: (lendApy + crvBoost) > 30 ? 'HIGH' : 'MEDIUM',
+          chain: normalizeChain(chain),
+          address: m.vault || m.controller || '',
+          project: 'llamalend'
+        };
+      });
+    } catch (e) {
+      console.error(`LlamaLend ${chain} fetch error:`, e);
+      return [];
+    }
+  });
+
+  const all = await Promise.all(fetches);
+  return all.flat();
+}
+
+async function fetchBoostedLP() {
+  try {
+    const res = await fetch('https://yields.llama.fi/pools');
+    const json = await res.json();
+    const pools = (json.data || []).filter(p => {
+      const proj = (p.project || '').toLowerCase();
+      const sym = (p.symbol || '').toUpperCase();
+      return (proj === 'convex-finance' || proj === 'stakedao') && sym.includes('CRVUSD');
+    });
+    return pools.map(p => {
+      const proj = (p.project || '').toLowerCase();
+      let booster = 'Convex';
+      if (proj === 'stakedao') booster = 'StakeDAO';
+      return {
+        name: p.symbol || 'crvUSD LP',
+        source: 'Boosted LP',
+        booster: booster,
+        apy: p.apy || 0,
+        apyBase: p.apyBase,
+        apyReward: p.apyReward,
+        tvl: p.tvlUsd || 0,
+        risk: 'HIGH',
+        chain: normalizeChain(p.chain),
+        address: p.pool || '',
+        project: p.project
+      };
+    });
+  } catch (e) {
+    console.error('Boosted LP fetch error:', e);
+    return [];
+  }
+}
+
+// ============================================================
+// RENDERING
+// ============================================================
+function getFilteredPools() {
+  return allPools.filter(p => {
+    if (filters.chain !== 'all' && p.chain !== filters.chain) return false;
+    if (filters.source !== 'all' && p.source !== filters.source) return false;
+    if (filters.risk !== 'all' && p.risk !== filters.risk) return false;
+    return true;
+  });
+}
+
+function sortPools(pools) {
+  const k = currentSort.key;
+  const dir = currentSort.dir === 'asc' ? 1 : -1;
+  return [...pools].sort((a, b) => {
+    let va = a[k], vb = b[k];
+    if (k === 'name' || k === 'source' || k === 'chain' || k === 'risk') {
+      va = (va || '').toLowerCase();
+      vb = (vb || '').toLowerCase();
+      if (k === 'risk') {
+        const order = { low: 0, medium: 1, high: 2 };
+        va = order[va] ?? 1;
+        vb = order[vb] ?? 1;
+      } else {
+        return va < vb ? -dir : va > vb ? dir : 0;
+      }
+    }
+    return ((va || 0) - (vb || 0)) * dir;
+  });
+}
+
+function renderTable() {
+  const filtered = getFilteredPools();
+  const sorted = sortPools(filtered);
+  const tbody = document.getElementById('pool-body');
+
+  if (sorted.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--dim);letter-spacing:1px;">NO POOLS MATCH FILTERS</td></tr>';
+    return;
+  }
+
+  let html = '';
+  sorted.forEach((p, i) => {
+    const apyCls = apyClass(p.apy);
+    const riskCls = riskClass(p.risk);
+    const chainCls = chainClass(p.chain);
+
+    html += `<tr data-idx="${i}" onclick="toggleDetail(this)">
+      <td>${p.name} <span class="chain-badge ${chainCls}" style="margin-left:4px;display:inline-block;">${p.chain}</span></td>
+      <td class="source-badge">${p.source}${p.booster ? ' <span style="color:var(--dim);font-size:9px">(' + p.booster + ')</span>' : ''}</td>
+      <td class="${apyCls}">${fmtApy(p.apy)}</td>
+      <td class="col-tvl">${fmtTvl(p.tvl)}</td>
+      <td><span class="risk-badge ${riskCls}">${p.risk}</span></td>
+      <td class="col-chain"><span class="chain-badge ${chainCls}">${p.chain}</span></td>
+    </tr>`;
+    html += `<tr class="row-details" id="detail-${i}"><td colspan="6">
+      <div class="detail-grid">
+        <div class="detail-item">Base APY: <span>${p.apyBase != null ? p.apyBase.toFixed(2) + '%' : '--'}</span></div>
+        <div class="detail-item">Reward APY: <span>${p.apyReward != null ? p.apyReward.toFixed(2) + '%' : '--'}</span></div>
+        <div class="detail-item">Address: <span style="font-size:9px;">${p.address ? p.address.slice(0, 10) + '...' + p.address.slice(-6) : '--'}</span></div>
+        <div class="detail-item">Project: <span>${p.project || '--'}</span></div>
+      </div>
+    </td></tr>`;
+  });
+
+  tbody.innerHTML = html;
+}
+
+function toggleDetail(row) {
+  const idx = row.getAttribute('data-idx');
+  const detail = document.getElementById('detail-' + idx);
+  if (detail) detail.classList.toggle('open');
+}
+
+function updateSummary() {
+  const filtered = getFilteredPools();
+  const bestApy = filtered.reduce((max, p) => Math.max(max, p.apy || 0), 0);
+  const chains = new Set(allPools.map(p => p.chain));
+
+  document.getElementById('best-apy').textContent = bestApy > 0 ? fmtApy(bestApy) : '--';
+  document.getElementById('total-pools').textContent = filtered.length;
+  document.getElementById('chains-scanned').textContent = chains.size;
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll('.pool-table th').forEach(th => {
+    const key = th.getAttribute('data-sort');
+    const arrow = th.querySelector('.sort-arrow');
+    if (key === currentSort.key) {
+      th.classList.add('sort-active');
+      arrow.innerHTML = currentSort.dir === 'asc' ? '&#9650;' : '&#9660;';
+    } else {
+      th.classList.remove('sort-active');
+      arrow.innerHTML = '';
+    }
+  });
+}
+
+// ============================================================
+// EVENT HANDLERS
+// ============================================================
+
+// Filter pills
+document.querySelectorAll('.filter-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    const group = pill.getAttribute('data-group');
+    const value = pill.getAttribute('data-value');
+
+    // Deactivate siblings
+    document.querySelectorAll(`.filter-pill[data-group="${group}"]`).forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+
+    filters[group] = value;
+    renderTable();
+    updateSummary();
+  });
+});
+
+// Sort headers
+document.querySelectorAll('.pool-table th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.getAttribute('data-sort');
+    if (currentSort.key === key) {
+      currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      currentSort.key = key;
+      currentSort.dir = (key === 'apy' || key === 'tvl') ? 'desc' : 'asc';
+    }
+    updateSortHeaders();
+    renderTable();
+  });
+});
+
+// ============================================================
+// INIT
+// ============================================================
+async function init() {
+  try {
+    const [scrvusd, llamalend, boosted] = await Promise.all([
+      fetchScrvUSD(),
+      fetchLlamaLend(),
+      fetchBoostedLP()
+    ]);
+
+    allPools = [...scrvusd, ...llamalend, ...boosted];
+
+    // Remove duplicates by address+chain
+    const seen = new Set();
+    allPools = allPools.filter(p => {
+      const key = (p.address || '') + '|' + p.chain + '|' + p.source;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // Filter out dust pools (TVL < $1K) except scrvUSD
+    allPools = allPools.filter(p => p.source === 'scrvUSD' || p.tvl >= 1000);
+
+    document.getElementById('last-updated').textContent = new Date().toLocaleString('en-GB', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+
+    updateSortHeaders();
+    renderTable();
+    updateSummary();
+  } catch (e) {
+    console.error('Init error:', e);
+    document.getElementById('pool-body').innerHTML =
+      '<tr><td colspan="6"><div class="error-state">FAILED TO FETCH DATA. CHECK CONSOLE.</div></td></tr>';
+  }
+}
+
+init();
+</script>
+</body>
+</html>
