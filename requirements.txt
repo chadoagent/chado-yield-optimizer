@@ -7,3 +7,4 @@ pydantic-settings>=2.7.0
 python-dotenv>=1.0.0
 eth-account>=0.13.0
 sse-starlette>=2.0.0
+x402[fastapi]>=2.3.0

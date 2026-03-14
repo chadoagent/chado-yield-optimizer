@@ -68,6 +68,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── x402 Payment Middleware ──────────────────────────────────────
+try:
+    from src.x402_payments import create_x402_middleware_config
+    from x402.http.middleware.fastapi import PaymentMiddlewareASGI
+    x402_routes, x402_server = create_x402_middleware_config()
+    app.add_middleware(PaymentMiddlewareASGI, routes=x402_routes, server=x402_server)
+    logger.info("x402 payment middleware enabled")
+except Exception as e:
+    logger.warning(f"x402 middleware not loaded (payments disabled): {e}")
+
 optimizer = YieldOptimizer()
 
 # ── Simple cache to avoid hammering APIs ─────────────────────────
@@ -915,25 +925,32 @@ async def a2a_stream_endpoint(request: Request, auth: dict = Depends(verify_api_
 
 @app.get("/api/pricing")
 async def pricing():
-    """API pricing tiers and rate limits."""
+    """API pricing — pay-per-request via x402 protocol (USDC on Base)."""
     return {
-        "tiers": {
-            name: {
-                "price_usd_monthly": config["price_usd"],
-                "rate_limit": f"{config['rate_limit']} req/min",
-                "a2a_access": config["a2a_access"],
-                "rebalance_access": config["rebalance_access"],
-                "risk_score_access": config["risk_score_access"],
-            }
-            for name, config in TIERS.items()
+        "payment_protocol": "x402 (HTTP 402 Payment Required)",
+        "currency": "USDC",
+        "network": "Base (eip155:8453)",
+        "pricing": {
+            "GET /api/pools": "$0.001",
+            "GET /api/best-yield": "$0.001",
+            "GET /api/risk-score/{pool_id}": "$0.005",
+            "POST /api/rebalance": "$0.01",
+            "POST /a2a": "$0.01",
+            "POST /a2a/stream": "$0.01",
         },
-        "anonymous": {
-            "price_usd_monthly": 0,
-            "rate_limit": "5 req/min",
-            "note": "No API key required. Limited access.",
-        },
+        "free_endpoints": [
+            "GET /health",
+            "GET /api/pricing",
+            "GET /.well-known/agent.json",
+            "GET /docs",
+        ],
+        "how_it_works": (
+            "1. Request any paid endpoint without payment → get 402 with payment details. "
+            "2. Sign a USDC payment on Base using the returned parameters. "
+            "3. Resend request with X-PAYMENT header → get 200 with data."
+        ),
+        "wallet": "0x6a1175D0EA0e6817786Ce51F1C4F3294F907f410",
         "contact": "api@chado.studio",
-        "how_to_get_key": "POST /api/request-key with your email and desired tier",
     }
 
 
