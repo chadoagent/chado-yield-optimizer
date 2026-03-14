@@ -1,0 +1,63 @@
+{
+  "name": "Chado Yield Optimizer",
+  "description": "Autonomous multi-chain crvUSD yield optimizer with Gnosis Safe wallet execution. Monitors scrvUSD savings, LlamaLend deposits, Convex/StakeDAO boosted LP across Ethereum, Arbitrum, Optimism, Fraxtal.",
+  "version": "0.3.0",
+  "image": "https://olas.network/images/agents/yield-optimizer.png",
+  "code_uri": "https://github.com/sodofi/synthesis-hackathon",
+  "attributes": [
+    {
+      "trait_type": "category",
+      "value": "yield-optimization"
+    },
+    {
+      "trait_type": "protocol",
+      "value": "curve-finance"
+    },
+    {
+      "trait_type": "chains",
+      "value": "ethereum,arbitrum,optimism,fraxtal"
+    },
+    {
+      "trait_type": "wallet",
+      "value": "gnosis-safe"
+    },
+    {
+      "trait_type": "hackathon",
+      "value": "synthesis-2026"
+    }
+  ],
+  "capabilities": {
+    "yield_sources": [
+      "scrvusd",
+      "llamalend",
+      "crvusd_mint",
+      "boosted_lp"
+    ],
+    "chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "fraxtal"
+    ],
+    "wallet": {
+      "type": "gnosis_safe",
+      "actions": [
+        "deposit",
+        "withdraw",
+        "rebalance"
+      ]
+    },
+    "protocols": [
+      "a2a",
+      "erc-8004"
+    ]
+  },
+  "endpoints": {
+    "health": "/health",
+    "agent_card": "/.well-known/agent.json",
+    "a2a": "/a2a",
+    "yields": "/api/v1/yields",
+    "optimize": "/api/v1/optimize",
+    "wallet": "/api/v1/wallet"
+  }
+}

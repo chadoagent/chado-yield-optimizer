@@ -1,13 +1,14 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
+from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 
 from src.config import settings, wallet_settings
 from src.agents.yield_optimizer import YieldOptimizer, SUPPORTED_CHAINS
-from src.protocols.a2a import handle_a2a_request
+from src.protocols.a2a import handle_a2a_request, task_store, stream_task_events
 from src.utils.logging import ExecutionLogger
 
-app = FastAPI(title="Chado Yield Optimizer", version="0.3.0")
+app = FastAPI(title="Chado Yield Optimizer", version="0.4.0")
 optimizer = YieldOptimizer()
 logger = ExecutionLogger()
 
@@ -347,14 +348,12 @@ async def wallet_rebalance(req: OptimizeRequest):
     }
 
 
-# ── A2A + Agent Card ──────────────────────────────────────────────
+# ── A2A v1.0 Handlers ─────────────────────────────────────────────
 
 
-@app.post("/a2a")
-async def a2a_endpoint(request: Request):
-    """A2A (Agent-to-Agent) JSON-RPC 2.0 endpoint."""
-    data = await request.json()
-    handlers = {
+def _a2a_handlers() -> dict:
+    """Build A2A skill handlers mapping."""
+    return {
         "optimize": lambda params: optimizer.run(params),
         "yields": lambda params: optimizer.run({**params, "min_tvl": 0}),
         "status": lambda _: {
@@ -364,39 +363,159 @@ async def a2a_endpoint(request: Request):
         },
         "chains": lambda _: optimizer.get_supported_chains(),
     }
-    result = await handle_a2a_request(data, handlers)
+
+
+# ── A2A JSON-RPC 2.0 endpoint ────────────────────────────────────
+
+
+@app.post("/a2a")
+async def a2a_endpoint(request: Request):
+    """A2A v1.0 JSON-RPC 2.0 endpoint.
+
+    Supports:
+    - SendMessage: create task, execute skill, return result
+    - GetTask: get task by ID
+    - ListTasks: list tasks (optional contextId filter)
+    - CancelTask: cancel running task
+    - Legacy methods: optimize, yields, status, chains
+    """
+    data = await request.json()
+    result = await handle_a2a_request(data, _a2a_handlers())
     return JSONResponse(content=result)
+
+
+# ── A2A REST endpoints ────────────────────────────────────────────
+
+
+@app.post("/tasks:sendMessage")
+async def send_message(request: Request):
+    """REST binding: send a message to create/continue a task."""
+    data = await request.json()
+    rpc = {"jsonrpc": "2.0", "method": "SendMessage", "params": data, "id": 1}
+    result = await handle_a2a_request(rpc, _a2a_handlers())
+    return JSONResponse(content=result.get("result", result))
+
+
+@app.post("/tasks:sendStreamingMessage")
+async def send_streaming_message(request: Request):
+    """REST binding: SSE streaming for task execution."""
+    params = await request.json()
+
+    async def event_generator():
+        async for event in stream_task_events("new", _a2a_handlers(), params):
+            yield event
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/tasks/{task_id}")
+async def get_task(task_id: str):
+    """REST binding: get task by ID."""
+    task = task_store.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    return task.model_dump()
+
+
+@app.get("/tasks")
+async def list_tasks(context_id: str | None = None, limit: int = 50):
+    """REST binding: list tasks."""
+    tasks = task_store.list_tasks(context_id=context_id, limit=limit)
+    return {"tasks": [t.model_dump() for t in tasks]}
+
+
+@app.post("/tasks/{task_id}:cancel")
+async def cancel_task(task_id: str):
+    """REST binding: cancel a task."""
+    from src.protocols.a2a import TaskState
+    task = task_store.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    if task.status.state in (TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED):
+        raise HTTPException(status_code=409, detail=f"Task in terminal state: {task.status.state}")
+    task_store.update_status(task_id, TaskState.CANCELED, "Canceled by client")
+    return task_store.get(task_id).model_dump()
+
+
+@app.get("/tasks/{task_id}:subscribe")
+async def subscribe_task(task_id: str):
+    """REST binding: SSE stream for existing task updates."""
+    task = task_store.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    q = task_store.subscribe(task_id)
+
+    async def event_generator():
+        import json
+        # Send current state first
+        yield f"data: {json.dumps({'type': 'status', 'task': task.model_dump()})}\n\n"
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                    # Stop on terminal states
+                    if event.get("type") == "status":
+                        state = event.get("task", {}).get("status", {}).get("state", "")
+                        if state in ("completed", "failed", "canceled"):
+                            break
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        finally:
+            task_store.unsubscribe(task_id, q)
+
+    return EventSourceResponse(event_generator())
+
+
+# ── Agent Card (A2A v1.0) ────────────────────────────────────────
 
 
 @app.get("/.well-known/agent.json")
 async def agent_card():
-    """Serve agent.json for A2A discovery."""
+    """A2A v1.0 Agent Card for discovery."""
     return {
-        "format": "Registration-v1",
         "name": "Chado Yield Optimizer",
         "description": (
             "Multi-chain crvUSD yield optimizer with Gnosis Safe wallet execution. "
             "Sources: scrvUSD savings, LlamaLend deposit, Convex/StakeDAO boosted LP. "
             "Chains: Ethereum, Arbitrum, Optimism, Fraxtal."
         ),
-        "version": "0.3.0",
-        "services": [
-            {"type": "api", "url": f"http://localhost:{settings.port}/api/v1"}
-        ],
-        "supportedTrust": ["execution-logs"],
-        "capabilities": {
-            "yield_sources": ["scrvusd", "llamalend", "crvusd_mint", "boosted_lp"],
-            "chains": [c["name"] for c in SUPPORTED_CHAINS],
-            "risk_levels": ["low", "medium", "high"],
-            "wallet": {
-                "type": "gnosis_safe",
-                "supported_actions": ["deposit", "withdraw", "rebalance"],
-                "supported_pools": ["scrvusd"],
-            },
+        "url": f"http://localhost:{settings.port}",
+        "version": "0.4.0",
+        "provider": {
+            "organization": "Chado Studio",
+            "url": "https://chado.studio",
         },
+        "capabilities": {
+            "streaming": True,
+            "pushNotifications": False,
+        },
+        "skills": [
+            {
+                "id": "optimize",
+                "name": "Yield Optimization",
+                "description": "Compare current position against best crvUSD yield opportunities across chains",
+            },
+            {
+                "id": "yields",
+                "name": "Yield Discovery",
+                "description": "Fetch current crvUSD yield rates across all sources and chains",
+            },
+            {
+                "id": "status",
+                "name": "Agent Status",
+                "description": "Get optimizer status and configuration",
+            },
+        ],
+        "interfaces": [
+            {"type": "jsonrpc", "url": f"http://localhost:{settings.port}/a2a"},
+            {"type": "rest", "url": f"http://localhost:{settings.port}"},
+        ],
     }
 
 
 if __name__ == "__main__":
+    import asyncio
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8717)
