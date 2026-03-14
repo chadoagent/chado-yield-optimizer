@@ -73,6 +73,8 @@ try:
     from src.x402_payments import create_x402_middleware_config
     from x402.http.middleware.fastapi import PaymentMiddlewareASGI
     x402_routes, x402_server = create_x402_middleware_config()
+    # Pre-initialize to catch RouteConfigurationError at startup, not on first request
+    x402_server.initialize()
     app.add_middleware(PaymentMiddlewareASGI, routes=x402_routes, server=x402_server)
     logger.info("x402 payment middleware enabled")
 except Exception as e:

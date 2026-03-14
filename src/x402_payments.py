@@ -27,10 +27,10 @@ PAY_TO = os.environ.get("X402_WALLET_ADDRESS", "0x6a1175D0EA0e6817786Ce51F1C4F32
 # Base mainnet = eip155:8453
 NETWORK = "eip155:8453"
 
-# Facilitator: CDP for production, x402.org for testnet
+# Facilitator: Coinbase CDP for Base mainnet
 FACILITATOR_URL = os.environ.get(
     "X402_FACILITATOR_URL",
-    "https://x402.org/facilitator",
+    "https://api.cdp.coinbase.com/platform/v2/x402",
 )
 
 # ── Pricing tiers ───────────────────────────────────────────────
