@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     chain_id: int = 8453
 
     # ERC-8004 contracts
-    identity_registry: str = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
-    reputation_registry: str = "0x8004B663056A597Dffe9eCcC1965A193B7388713"
+    identity_registry: str = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+    reputation_registry: str = "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63"
 
     # Agent identity
     agent_uri: str = "https://chado.studio/yield/agent.json"

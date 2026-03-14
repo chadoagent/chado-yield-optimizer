@@ -24,8 +24,8 @@ from dotenv import load_dotenv
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
-# ERC-8004 Identity Registry on Base
-IDENTITY_REGISTRY = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+# ERC-8004 Identity Registry on Base Mainnet
+IDENTITY_REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
 
 # Minimal ABI for registration
 REGISTRY_ABI = [

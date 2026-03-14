@@ -387,6 +387,10 @@ class YieldOptimizer:
                 crv_max = self._parse_float(m.get("lend_apr_crv_max_boost", 0))
                 extra_rewards = m.get("extra_reward_apr", [])
 
+                # Skip markets with negligible TVL — APY is unreliable
+                if total_assets_usd < 1000:
+                    continue
+
                 pools.append(
                     PoolInfo(
                         name=f"LlamaLend: {name}",
@@ -447,33 +451,31 @@ class YieldOptimizer:
                 collateral = m.get("collateral_token", {})
                 symbol = collateral.get("symbol", "?")
 
-                # Estimate utilization from debt vs total supply
                 total_debt = self._parse_float(m.get("total_debt_usd", 0))
-                borrowable = self._parse_float(m.get("borrowable", 0))
                 debt_ceiling = self._parse_float(m.get("debt_ceiling", 0))
-
-                # These are mint markets — the "lend APY" is effectively
-                # the fee income distributed to crvUSD holders (via scrvUSD).
-                # Include for completeness but note they're not direct deposit markets.
                 total_value = total_debt + self._parse_float(
                     m.get("collateral_amount_usd", 0)
                 )
 
+                # crvUSD Mint markets: borrow_apy is what BORROWERS PAY,
+                # not what depositors earn. Fees flow to scrvUSD holders.
+                # Show as info-only with apy=0 (no direct yield to user).
                 pools.append(
                     PoolInfo(
                         name=f"crvUSD Mint: {symbol}",
                         address=m.get("address", ""),
-                        apy=borrow_apy,  # This is borrow cost, not lend yield
+                        apy=0.0,  # No direct yield — fees go to scrvUSD
                         tvl=total_value,
                         source=YieldSource.CRVUSD_MINT.value,
                         chain="ethereum",
                         risk=RiskLevel.MEDIUM.value,
-                        base_apy=borrow_apy,
+                        base_apy=0.0,
                         gas_cost_usd=15.0,
                         extra={
                             "type": "minting_market",
-                            "note": "Borrow rate, not direct deposit yield. "
-                            "Fees flow to scrvUSD holders.",
+                            "borrow_apy": borrow_apy,
+                            "note": "Borrow rate (cost to borrowers). "
+                            "Fees flow to scrvUSD holders, not direct yield.",
                             "total_debt_usd": total_debt,
                             "debt_ceiling": debt_ceiling,
                             "collateral_symbol": symbol,
