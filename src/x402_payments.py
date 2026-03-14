@@ -24,29 +24,32 @@ from x402.server import x402ResourceServer
 
 PAY_TO = os.environ.get("X402_WALLET_ADDRESS", "0x6a1175D0EA0e6817786Ce51F1C4F3294F907f410")
 
-# Base mainnet = eip155:8453
-NETWORK = "eip155:8453"
+# Base Sepolia testnet = eip155:84532 (x402.org facilitator supports this)
+# Base mainnet (eip155:8453) requires Coinbase CDP API keys
+NETWORK = os.environ.get("X402_NETWORK", "eip155:84532")
 
-# Facilitator: Coinbase CDP for Base mainnet
+# Facilitator: x402.org (free, supports Base Sepolia)
+# For mainnet: https://api.cdp.coinbase.com/platform/v2/x402 (requires CDP keys)
 FACILITATOR_URL = os.environ.get(
     "X402_FACILITATOR_URL",
-    "https://api.cdp.coinbase.com/platform/v2/x402",
+    "https://x402.org/facilitator",
 )
 
 # ── Pricing tiers ───────────────────────────────────────────────
 
+# Paid endpoints (analytics & actions)
 ROUTE_PRICES = {
-    "GET /api/pools": "$0.001",
-    "GET /api/best-yield": "$0.001",
     "GET /api/risk-score/{pool_id}": "$0.005",
     "POST /api/rebalance": "$0.01",
     "POST /a2a": "$0.01",
     "POST /a2a/stream": "$0.01",
 }
 
-# Free endpoints (no payment required)
+# Free endpoints — read-only data is free, analytics/actions are paid
 FREE_ENDPOINTS = {
     "GET /health",
+    "GET /api/pools",
+    "GET /api/best-yield",
     "GET /api/pricing",
     "GET /.well-known/agent.json",
     "GET /docs",

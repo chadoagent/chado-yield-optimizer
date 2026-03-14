@@ -931,10 +931,8 @@ async def pricing():
     return {
         "payment_protocol": "x402 (HTTP 402 Payment Required)",
         "currency": "USDC",
-        "network": "Base (eip155:8453)",
+        "network": "Base Sepolia testnet (eip155:84532)",
         "pricing": {
-            "GET /api/pools": "$0.001",
-            "GET /api/best-yield": "$0.001",
             "GET /api/risk-score/{pool_id}": "$0.005",
             "POST /api/rebalance": "$0.01",
             "POST /a2a": "$0.01",
@@ -942,6 +940,8 @@ async def pricing():
         },
         "free_endpoints": [
             "GET /health",
+            "GET /api/pools",
+            "GET /api/best-yield",
             "GET /api/pricing",
             "GET /.well-known/agent.json",
             "GET /docs",
