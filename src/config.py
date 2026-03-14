@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "CHADO_", "env_file": ".env"}
+    model_config = {"env_prefix": "CHADO_", "env_file": ".env", "extra": "ignore"}
 
     # Chain config (Base)
     chain_name: str = "base"
