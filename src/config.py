@@ -22,4 +22,20 @@ class Settings(BaseSettings):
     port: int = 8717
 
 
+class WalletSettings(BaseSettings):
+    """Wallet configuration — loaded from .env without prefix."""
+
+    model_config = {"env_file": ".env", "extra": "ignore"}
+
+    agent_private_key: str = ""
+    agent_eoa_address: str = ""
+    safe_address: str = ""
+    rpc_url: str = "https://ethereum-rpc.publicnode.com"
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.agent_private_key and self.safe_address)
+
+
 settings = Settings()
+wallet_settings = WalletSettings()

@@ -1,15 +1,51 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from src.config import settings
+from src.config import settings, wallet_settings
 from src.agents.yield_optimizer import YieldOptimizer, SUPPORTED_CHAINS
 from src.protocols.a2a import handle_a2a_request
 from src.utils.logging import ExecutionLogger
 
-app = FastAPI(title="Chado Yield Optimizer", version="0.2.0")
+app = FastAPI(title="Chado Yield Optimizer", version="0.3.0")
 optimizer = YieldOptimizer()
 logger = ExecutionLogger()
+
+# ── Lazy wallet initialization ─────────────────────────────────────
+# Wallet components are initialized on first use to avoid import errors
+# if web3 is not installed or .env is missing wallet keys.
+_safe_manager = None
+_strategy_executor = None
+
+
+def _get_safe_manager():
+    global _safe_manager
+    if _safe_manager is None:
+        if not wallet_settings.is_configured:
+            raise HTTPException(
+                status_code=503,
+                detail="Wallet not configured. Set AGENT_PRIVATE_KEY and SAFE_ADDRESS in .env",
+            )
+        from src.wallet.safe_manager import SafeManager
+
+        _safe_manager = SafeManager(
+            rpc_url=wallet_settings.rpc_url,
+            private_key=wallet_settings.agent_private_key,
+            safe_address=wallet_settings.safe_address,
+        )
+    return _safe_manager
+
+
+def _get_strategy_executor():
+    global _strategy_executor
+    if _strategy_executor is None:
+        from src.wallet.strategies import StrategyExecutor
+
+        _strategy_executor = StrategyExecutor(_get_safe_manager())
+    return _strategy_executor
+
+
+# ── Request/Response Models ────────────────────────────────────────
 
 
 class OptimizeRequest(BaseModel):
@@ -67,14 +103,31 @@ class ChainInfo(BaseModel):
     gas_cost_usd: float
 
 
+class DepositRequest(BaseModel):
+    pool_address: str = "0x0655977FEb2f289A4aB78af67BAB0d17aAb84367"  # scrvUSD default
+    amount: float  # crvUSD amount (human-readable, e.g. 10.0)
+    pool_type: str = "scrvusd"
+
+
+class WithdrawRequest(BaseModel):
+    pool_address: str = "0x0655977FEb2f289A4aB78af67BAB0d17aAb84367"  # scrvUSD default
+    amount: float  # amount to withdraw (human-readable)
+    pool_type: str = "scrvusd"
+    is_shares: bool = False  # if True, amount is in shares (scrvUSD), else assets (crvUSD)
+
+
+# ── Existing Endpoints ─────────────────────────────────────────────
+
+
 @app.get("/health")
 async def health():
     return {
         "status": "ok",
         "agent": "chado-yield-optimizer",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "sources": ["scrvusd", "llamalend", "crvusd_mint", "boosted_lp"],
         "chains": [c["name"] for c in SUPPORTED_CHAINS],
+        "wallet_configured": wallet_settings.is_configured,
     }
 
 
@@ -149,6 +202,154 @@ async def optimize(req: OptimizeRequest):
     )
 
 
+# ── Wallet Endpoints ──────────────────────────────────────────────
+
+
+@app.get("/api/v1/wallet/status")
+async def wallet_status():
+    """Agent wallet status: Safe info, configuration, readiness."""
+    if not wallet_settings.is_configured:
+        return {
+            "configured": False,
+            "error": "Wallet not configured. Set AGENT_PRIVATE_KEY and SAFE_ADDRESS.",
+        }
+
+    try:
+        safe = _get_safe_manager()
+        info = safe.get_safe_info()
+        return {
+            "configured": True,
+            "safe": info,
+            "eoa_address": wallet_settings.agent_eoa_address,
+            "rpc_url": wallet_settings.rpc_url,
+        }
+    except Exception as e:
+        return {"configured": True, "error": str(e)}
+
+
+@app.get("/api/v1/wallet/balances")
+async def wallet_balances():
+    """Get current Safe balances (ETH, crvUSD, scrvUSD)."""
+    safe = _get_safe_manager()
+    return safe.get_balances()
+
+
+@app.post("/api/v1/wallet/deposit")
+async def wallet_deposit(req: DepositRequest):
+    """Deposit crvUSD into a yield pool through the Safe.
+
+    Default pool: scrvUSD savings vault.
+    """
+    log_entry = logger.start("wallet_deposit", {
+        "pool": req.pool_address,
+        "amount": req.amount,
+        "pool_type": req.pool_type,
+    })
+
+    safe = _get_safe_manager()
+    from web3 import Web3
+
+    amount_wei = Web3.to_wei(req.amount, "ether")
+    result = safe.deposit_to_pool(
+        pool_address=req.pool_address,
+        amount_wei=amount_wei,
+        pool_type=req.pool_type,
+    )
+
+    logger.end(log_entry, {"success": result.success, "tx_hash": result.tx_hash})
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    return {
+        "success": result.success,
+        "tx_hash": result.tx_hash,
+        "gas_used": result.gas_used,
+        "amount": str(req.amount),
+        "pool": req.pool_address,
+    }
+
+
+@app.post("/api/v1/wallet/withdraw")
+async def wallet_withdraw(req: WithdrawRequest):
+    """Withdraw from a yield pool back to Safe.
+
+    Default pool: scrvUSD savings vault.
+    """
+    log_entry = logger.start("wallet_withdraw", {
+        "pool": req.pool_address,
+        "amount": req.amount,
+        "pool_type": req.pool_type,
+    })
+
+    safe = _get_safe_manager()
+    from web3 import Web3
+
+    amount_wei = Web3.to_wei(req.amount, "ether")
+    result = safe.withdraw_from_pool(
+        pool_address=req.pool_address,
+        amount_wei=amount_wei,
+        pool_type=req.pool_type,
+        is_shares=req.is_shares,
+    )
+
+    logger.end(log_entry, {"success": result.success, "tx_hash": result.tx_hash})
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    return {
+        "success": result.success,
+        "tx_hash": result.tx_hash,
+        "gas_used": result.gas_used,
+        "amount": str(req.amount),
+        "pool": req.pool_address,
+    }
+
+
+@app.post("/api/v1/wallet/rebalance")
+async def wallet_rebalance(req: OptimizeRequest):
+    """Run optimizer and auto-execute the recommended strategy.
+
+    Combines yield optimization with on-chain execution:
+    1. Fetches current yields across all sources
+    2. Determines optimal strategy (hold/enter/rebalance)
+    3. Executes the strategy through the Safe
+    """
+    log_entry = logger.start("wallet_rebalance", {
+        "current_pool": req.current_pool,
+        "chains": req.chains,
+    })
+
+    # Step 1: Get optimizer recommendation
+    result = await optimizer.run({
+        "current_pool": req.current_pool,
+        "min_tvl": req.min_tvl,
+        "chains": req.chains or [c["name"] for c in SUPPORTED_CHAINS],
+        "risk_filter": req.risk_filter,
+        "position_size": req.position_size,
+    })
+
+    # Step 2: Execute strategy
+    executor = _get_strategy_executor()
+    rebalance_result = executor.auto_rebalance(result)
+
+    logger.end(log_entry, rebalance_result.to_dict())
+
+    return {
+        "optimizer": {
+            "strategy": result["strategy"],
+            "rationale": result.get("rationale", ""),
+            "best_yield": result["best_yield"],
+            "current_apy": result["current_apy"],
+        },
+        "execution": rebalance_result.to_dict(),
+    }
+
+
+# ── A2A + Agent Card ──────────────────────────────────────────────
+
+
 @app.post("/a2a")
 async def a2a_endpoint(request: Request):
     """A2A (Agent-to-Agent) JSON-RPC 2.0 endpoint."""
@@ -159,6 +360,7 @@ async def a2a_endpoint(request: Request):
         "status": lambda _: {
             "optimizer": optimizer.status(),
             "chains": [c["name"] for c in SUPPORTED_CHAINS],
+            "wallet_configured": wallet_settings.is_configured,
         },
         "chains": lambda _: optimizer.get_supported_chains(),
     }
@@ -173,11 +375,11 @@ async def agent_card():
         "format": "Registration-v1",
         "name": "Chado Yield Optimizer",
         "description": (
-            "Multi-chain crvUSD yield optimizer. "
+            "Multi-chain crvUSD yield optimizer with Gnosis Safe wallet execution. "
             "Sources: scrvUSD savings, LlamaLend deposit, Convex/StakeDAO boosted LP. "
             "Chains: Ethereum, Arbitrum, Optimism, Fraxtal."
         ),
-        "version": "0.2.0",
+        "version": "0.3.0",
         "services": [
             {"type": "api", "url": f"http://localhost:{settings.port}/api/v1"}
         ],
@@ -186,6 +388,11 @@ async def agent_card():
             "yield_sources": ["scrvusd", "llamalend", "crvusd_mint", "boosted_lp"],
             "chains": [c["name"] for c in SUPPORTED_CHAINS],
             "risk_levels": ["low", "medium", "high"],
+            "wallet": {
+                "type": "gnosis_safe",
+                "supported_actions": ["deposit", "withdraw", "rebalance"],
+                "supported_pools": ["scrvusd"],
+            },
         },
     }
 
