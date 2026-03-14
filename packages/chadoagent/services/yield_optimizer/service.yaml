@@ -1,0 +1,27 @@
+name: yield_optimizer
+author: chadoagent
+version: 0.1.0
+license: Apache-2.0
+description: >
+  Chado Yield Optimizer service — autonomous crvUSD yield optimization
+  with multi-chain support and Gnosis Safe wallet execution.
+aea_version: '>=1.0.0, <2.0.0'
+fingerprint: {}
+fingerprint_ignore_patterns: []
+agent: valory/yield_optimizer:0.1.0:bafybei0000000000000000000000000000000000000000000000000placeholder
+number_of_agents: 1
+deployment:
+  agent:
+    image: chadoagent/oar-yield-optimizer
+    ports:
+      8716: 8716
+      8717: 8717
+    environment:
+      - RPC_URL
+      - SAFE_ADDRESS
+      - AGENT_PRIVATE_KEY
+  type: docker-compose
+network: hardhat
+---
+public_id: chadoagent/yield_optimizer:0.1.0
+type: service

@@ -9,6 +9,11 @@ from src.protocols.a2a import handle_a2a_request, task_store, stream_task_events
 from src.utils.logging import ExecutionLogger
 
 app = FastAPI(title="Chado Yield Optimizer", version="0.4.0")
+
+# Olas SDK compatibility: healthcheck endpoint, file logging, key file support
+from src.olas_compat import setup_olas_compat
+setup_olas_compat(app)
+
 optimizer = YieldOptimizer()
 logger = ExecutionLogger()
 
