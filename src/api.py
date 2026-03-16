@@ -16,9 +16,14 @@ Run:
 
 from __future__ import annotations
 
+import collections
 import hashlib
+import json
 import logging
+import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -67,6 +72,69 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Request Logging Middleware ────────────────────────────────────
+
+_ACCESS_LOG_FILE = Path(os.environ.get(
+    "ACCESS_LOG_PATH",
+    Path(__file__).parent.parent / "access.log",
+))
+_ACCESS_LOG_BUFFER: collections.deque[dict] = collections.deque(maxlen=100)
+_FIRST_EXTERNAL_MARKER = Path(os.environ.get(
+    "FIRST_EXTERNAL_MARKER",
+    Path(__file__).parent.parent / ".first_external_request",
+))
+_LOCALHOST_PREFIXES = ("127.0.0.1", "::1", "localhost")
+
+
+def _is_localhost(ip: str | None) -> bool:
+    if not ip:
+        return False
+    return ip.startswith(_LOCALHOST_PREFIXES)
+
+
+@app.middleware("http")
+async def access_log_middleware(request: Request, call_next):
+    """Log every request: timestamp, method, path, client IP, status, response time."""
+    start = time.monotonic()
+    client_ip = request.client.host if request.client else "unknown"
+
+    response = await call_next(request)
+
+    elapsed_ms = round((time.monotonic() - start) * 1000, 2)
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    entry = {
+        "timestamp": ts,
+        "method": request.method,
+        "path": str(request.url.path),
+        "query": str(request.url.query) if request.url.query else None,
+        "client_ip": client_ip,
+        "status_code": response.status_code,
+        "response_time_ms": elapsed_ms,
+    }
+
+    # In-memory ring buffer (last 100)
+    _ACCESS_LOG_BUFFER.append(entry)
+
+    # File log (append, one JSON line per request)
+    try:
+        with open(_ACCESS_LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        logger.warning("Failed to write access log: %s", e)
+
+    # First external request detection
+    if not _is_localhost(client_ip) and not _FIRST_EXTERNAL_MARKER.exists():
+        try:
+            _FIRST_EXTERNAL_MARKER.write_text(json.dumps(entry, indent=2))
+            logger.info("First external request detected from %s: %s %s",
+                        client_ip, request.method, request.url.path)
+        except Exception as e:
+            logger.warning("Failed to write first-external marker: %s", e)
+
+    return response
+
 
 # ── x402 Payment Middleware ──────────────────────────────────────
 try:
@@ -197,6 +265,25 @@ async def health():
         "service": "crvusd-yield-optimizer-api",
         "version": "1.1.0",
         "a2a": True,
+    }
+
+
+@app.get("/api/access-log")
+async def access_log(
+    limit: int = Query(100, ge=1, le=100, description="Number of recent entries to return"),
+):
+    """Return recent access log entries (last 100 requests kept in memory).
+
+    No authentication required -- useful for monitoring.
+    """
+    entries = list(_ACCESS_LOG_BUFFER)
+    # Most recent first
+    entries.reverse()
+    return {
+        "entries": entries[:limit],
+        "total_in_buffer": len(_ACCESS_LOG_BUFFER),
+        "log_file": str(_ACCESS_LOG_FILE),
+        "first_external_detected": _FIRST_EXTERNAL_MARKER.exists(),
     }
 
 
