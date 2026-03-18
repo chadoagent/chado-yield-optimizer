@@ -10,7 +10,7 @@
 
 ## The Problem
 
-crvUSD holders face a fragmented yield landscape. Opportunities are scattered across multiple protocols -- LlamaLend markets, scrvUSD savings vault, Convex boosted LPs, StakeDAO positions -- each with different APYs, risk profiles, and gas costs. Worse, these exist across multiple chains (Ethereum, Arbitrum, Optimism, Fraxtal), making manual comparison impractical.
+crvUSD holders face a fragmented yield landscape. Opportunities are scattered across multiple protocols -- LlamaLend markets, scrvUSD savings vault, Convex boosted LPs, StakeDAO positions -- each with different APYs, risk profiles, and gas costs. Worse, these exist across multiple chains (Ethereum, Arbitrum, Base, Optimism, Fraxtal), making manual comparison impractical.
 
 Today a crvUSD holder must:
 - Monitor 50+ yield pools across 4 chains manually
@@ -26,7 +26,7 @@ This is exactly the kind of repetitive, data-intensive, multi-step workflow that
 Chado Yield Optimizer is an autonomous AI agent deployed on the Olas network that continuously monitors crvUSD yield opportunities and executes optimal strategies through a Gnosis Safe wallet.
 
 The agent:
-1. **Discovers** yield pools across LlamaLend, scrvUSD, Convex, and StakeDAO on 4 chains simultaneously
+1. **Discovers** yield pools across LlamaLend, scrvUSD, Convex, and StakeDAO on 5 chains simultaneously
 2. **Analyzes** each pool's risk-adjusted return (base APY + rewards - gas - bridge costs)
 3. **Recommends** whether to hold, enter, or rebalance -- with full rationale
 4. **Executes** deposit/withdraw/rebalance transactions through a Safe multisig
@@ -34,7 +34,7 @@ The agent:
 
 ## Key Features
 
-- **57 yield pools** across 3 active chains (Ethereum, Arbitrum, Optimism)
+- **57+ yield pools** across 4 active chains (Ethereum, Arbitrum, Base, Optimism)
 - **Real-time APY comparison** from LlamaLend, Convex, StakeDAO, scrvUSD savings vault
 - **Risk scoring** (Low/Medium/High) per pool based on protocol type and TVL
 - **Deposit/Withdraw/Claim** via Gnosis Safe -- no private key exposure
@@ -69,7 +69,8 @@ Chado Yield Optimizer Agent
   |
   +-- Infrastructure
         +-- Docker + GHCR          (CI/CD via GitHub Actions)
-        +-- Olas Service #57       (on-chain registration)
+        +-- Olas Service #57       (Ethereum registration)
+        +-- Olas Service #436      (Base L2 registration)
         +-- IPFS metadata          (agent/service/component hashes)
 ```
 
@@ -77,11 +78,13 @@ Chado Yield Optimizer Agent
 
 | Asset | ID | Registry |
 |-------|-----|----------|
-| Olas Service | #57 | ServiceRegistry `0x48b6af7B12C71f09e2fC8aF4855De4Ff54e775cA` |
-| Olas Agent | #104 | AgentRegistry (Ethereum) |
-| Olas Component | #316 | ComponentRegistry (Ethereum) |
+| Olas Service (Ethereum) | #57 | ServiceRegistry `0x48b6af7B12C71f09e2fC8aF4855De4Ff54e775cA` |
+| Olas Service (Base) | [#436](https://registry.olas.network/base/services/436) | ServiceRegistryL2 `0x3C1fF68f5aa342D296d4DEe4Bb1cACCA912D95fE` |
+| Olas Agent | #104, #105 | AgentRegistry (Ethereum) |
+| Olas Component | #316, #317 | ComponentRegistry (Ethereum) |
 | ERC-8004 Identity | #28683 | IdentityRegistry `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
-| Gnosis Safe | -- | `0xe63e82C57F4e5dF84bF923bBDBA1A8DA30e753f0` |
+| Gnosis Safe (Ethereum) | -- | `0xe63e82C57F4e5dF84bF923bBDBA1A8DA30e753f0` |
+| Gnosis Safe (Base) | -- | `0x68f3ffD33670c3ec1D8ff58cc53CcE066e3AE4e1` |
 
 ## Challenges We Ran Into
 
@@ -95,7 +98,7 @@ While integrating on-chain identity via ERC-8004, we discovered that the Olas ma
 The standard `safe-eth-py` library pulls in heavy dependencies and has version conflicts with modern Python. We implemented Safe transaction signing and execution using raw Web3.py + the Safe contract ABI directly -- encoding `execTransaction()` calls manually with proper signature packing. This keeps the Docker image lean and avoids dependency hell.
 
 ### Multi-chain Data Aggregation
-Fetching yield data from 4 chains simultaneously requires handling different RPC endpoints, varying response formats, and chain-specific quirks (Fraxtal's non-standard block structure, Arbitrum's L2 gas model). We use `httpx` with concurrent requests and per-chain error isolation so one chain's downtime doesn't block the others.
+Fetching yield data from 5 chains simultaneously requires handling different RPC endpoints, varying response formats, and chain-specific quirks (Fraxtal's non-standard block structure, Arbitrum's L2 gas model, Base's OP Stack specifics). We use `httpx` with concurrent requests and per-chain error isolation so one chain's downtime doesn't block the others.
 
 ### Gas Optimization
 Every on-chain operation on Ethereum mainnet costs real money. We implemented gas estimation, bridge cost modeling, and a minimum improvement threshold (5%) to ensure rebalancing recommendations are net-positive after all costs. The optimizer factors in gas for approve + deposit + potential withdrawal from current position.
@@ -137,7 +140,8 @@ Every on-chain operation on Ethereum mainnet costs real money. We implemented ga
 | API Docs (Swagger) | http://51.83.161.121:8717/docs |
 | Agent Card | http://51.83.161.121:8717/.well-known/agent.json |
 | Frontend | https://llama.box/yield-optimizer/ |
-| Olas Marketplace | https://marketplace.olas.network/ethereum/ai-agents/57 |
+| Olas Marketplace (Ethereum) | https://marketplace.olas.network/ethereum/ai-agents/57 |
+| Olas Registry (Base) | https://registry.olas.network/base/services/436 |
 | Docker Image | `ghcr.io/chadoagent/chado-yield-optimizer:latest` |
 | A2A Registry | https://a2aregistry.org/agents/0397efdd-0f43-4354-b305-593b5717ae69 |
 | PR #335 (Olas contribution) | https://github.com/valory-xyz/autonolas-frontend-mono/pull/335 |

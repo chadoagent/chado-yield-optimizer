@@ -2,8 +2,24 @@
   "format": "Registration-v1",
   "name": "Chado Yield Optimizer",
   "description": "Chado Yield Optimizer — crvUSD yield monitoring and rebalancing agent",
+  "chains": ["ethereum", "arbitrum", "base", "optimism", "fraxtal"],
   "services": [
     {"type": "api", "url": "https://chado.studio/yield/api/v1"}
   ],
+  "onChainIdentity": {
+    "ethereum": {
+      "olasService": 57,
+      "olasAgent": 104,
+      "olasComponent": 316,
+      "safe": "0xe63e82C57F4e5dF84bF923bBDBA1A8DA30e753f0"
+    },
+    "base": {
+      "olasService": 436,
+      "olasAgent": 105,
+      "olasComponent": 317,
+      "safe": "0x68f3ffD33670c3ec1D8ff58cc53CcE066e3AE4e1",
+      "serviceRegistry": "0x3C1fF68f5aa342D296d4DEe4Bb1cACCA912D95fE"
+    }
+  },
   "supportedTrust": ["execution-logs"]
 }
