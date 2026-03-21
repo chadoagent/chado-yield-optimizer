@@ -490,7 +490,7 @@ async def agent_card():
         "version": "0.4.0",
         "provider": {
             "organization": "Chado Studio",
-            "url": "https://chado.studio",
+            "url": "https://llama.box",
         },
         "capabilities": {
             "streaming": True,

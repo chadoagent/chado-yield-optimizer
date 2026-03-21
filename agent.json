@@ -2,9 +2,10 @@
   "format": "Registration-v1",
   "name": "Chado Yield Optimizer",
   "description": "Chado Yield Optimizer — crvUSD yield monitoring and rebalancing agent",
+  "image": "https://llama.box/dao-dashboard/logo.png",
   "chains": ["ethereum", "arbitrum", "base", "optimism", "fraxtal"],
   "services": [
-    {"type": "api", "url": "https://chado.studio/yield/api/v1"}
+    {"type": "api", "url": "https://llama.box/yield/api/v1"}
   ],
   "onChainIdentity": {
     "ethereum": {

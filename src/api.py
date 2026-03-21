@@ -1039,7 +1039,7 @@ async def pricing():
             "3. Resend request with X-PAYMENT header → get 200 with data."
         ),
         "wallet": "0x6a1175D0EA0e6817786Ce51F1C4F3294F907f410",
-        "contact": "api@chado.studio",
+        "contact": "api@llama.box",
     }
 
 
@@ -1069,7 +1069,7 @@ async def agent_card():
         "protocolVersion": "0.2.5",
         "provider": {
             "organization": "Chado Studio",
-            "url": "https://chado.studio",
+            "url": "https://llama.box",
         },
         "capabilities": {
             "streaming": True,

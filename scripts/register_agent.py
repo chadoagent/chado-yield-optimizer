@@ -6,7 +6,7 @@ Registers an agent identity by calling IdentityRegistry.register(agentURI).
 The agentURI should point to a hosted agent.json file (HTTP or IPFS).
 
 Usage:
-    python scripts/register_agent.py --uri https://agent.chado.studio/agent.json
+    python scripts/register_agent.py --uri https://agent.llama.box/agent.json
     python scripts/register_agent.py --uri ipfs://Qm.../agent.json
 """
 

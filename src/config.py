@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     reputation_registry: str = "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63"
 
     # Agent identity
-    agent_uri: str = "https://chado.studio/yield/agent.json"
+    agent_uri: str = "https://llama.box/yield/agent.json"
     private_key: str = ""
 
     # Server

@@ -130,7 +130,7 @@ def _check_rate_limit(key: str, tier_config: dict) -> None:
                 "tier": next((t for t, c in TIERS.items() if c is tier_config), "unknown"),
                 "limit": f"{limit} requests per {window}s",
                 "retry_after": retry_after,
-                "upgrade": "Contact us for higher limits: api@chado.studio",
+                "upgrade": "Contact us for higher limits: api@llama.box",
             },
             headers={"Retry-After": str(retry_after)},
         )
